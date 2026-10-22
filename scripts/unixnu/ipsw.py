@@ -8,6 +8,7 @@ The board describes the image in [ipsw]: url (the default remote source), produc
 chip_id, board_id, and the components the steps use.
 """
 import hashlib
+import http.client
 import io
 import json
 import plistlib
@@ -27,7 +28,7 @@ CHUNK = 8 << 20
 class RangeFile(io.RawIOBase):
     """A read-only seekable view of a remote file, fetched with HTTP range requests and a small block cache."""
 
-    def __init__(self, url, block=CHUNK, retries=4):
+    def __init__(self, url, block=CHUNK, retries=8):
         self.url, self.block, self.retries = url, block, retries
         self.position = 0
         self.cache = {}
@@ -67,10 +68,11 @@ class RangeFile(io.RawIOBase):
                         raise OSError('short range response')
                     self.cache[index] = data
                     break
-                except (OSError, urllib.error.URLError):
+                except (OSError, urllib.error.URLError, http.client.HTTPException):
+                    # HTTPException: a connection cut in the middle of a block (IncompleteRead)
                     if attempt == self.retries - 1:
                         raise
-                    time.sleep(2 ** attempt)
+                    time.sleep(min(2 ** attempt, 30))
         return self.cache[index]
 
     def readinto(self, buffer):

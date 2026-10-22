@@ -78,16 +78,18 @@ def build(ctx, modules):
     env.update(version_env(modules))
     env['JOBS'] = str(ctx.jobs)
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
-    if not record.is_file():
-        # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier
-        # pass leaves behind. A first build from scratch therefore runs one pass without them; it stops at the link,
-        # which needs their archives, so only the records are required of it.
+    filelist = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/link.filelist'
+    if not record.is_file() or not filelist.is_file():
+        # The archive builders and the boot progress layer read compile records of the XNU build and the link.filelist
+        # its link recipe writes, which only an earlier pass leaves behind. A first build from scratch therefore runs one
+        # pass without them; its link fails on their symbols, so only the records and the filelist are required of it.
+        # XNU_BOOTSTRAP_PASS lets the build script go on without the archives and leave them out of that link.
         log('kernel: bootstrap pass for the compile records')
-        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0'}
+        subprocess_env = {**env, 'XNU_BOOT_PROGRESS': '0', 'XNU_BOOTSTRAP_PASS': '1'}
         try:
             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
         except Error:
-            if not record.is_file():
+            if not record.is_file() or not filelist.is_file():
                 raise
     build_archives(ctx, env)
     run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')

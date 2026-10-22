@@ -102,7 +102,7 @@ cpu0 {
 }
 ```
 
-The first CPU is the boot CPU. Its `reg` value is the MPIDR affinity value. More than one CPU adds a `/psci` node with `compatible = "arm,psci-1.0"` and `method = "smc"` or `"hvc"`.
+The first CPU is the boot CPU. Its `reg` value is the MPIDR affinity value, Affinity0 to Affinity2. A SoC that numbers a cluster in Affinity2, for example `0x10000`, keeps that value. More than one CPU adds a `/psci` node with `compatible = "arm,psci-1.0"` and `method = "smc"` or `"hvc"`.
 
 ### arm-io
 

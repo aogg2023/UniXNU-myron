@@ -23,6 +23,7 @@ Patches apply in name order from `patches/xnu/*.patch` and `kits/NativePrelink/p
 | `architectural-timer-entry` | Skips the BCM2837 timer routing when the native architectural timer is enabled |
 | `armvirt-platform-personality` | Adds `ArmCpu`, `ArmVirtPlatform` and `ArmDTPlatform` personalities |
 | `native-smp-secondary` | Raises `MAX_CPUS` to 8 and uses MPIDR Affinity1 for BCM2837 secondary CPUs |
+| `native-smp-wide-affinity` | Matches BCM2837 CPUs on MPIDR Affinity0 to Affinity2 in the reset handler and in `ml_get_cpu_number` |
 | `native-arm-pan` | Enables ARMv8.1 PAN when `XNU_NATIVE_PAN` is set |
 | `native-dt-panic-region` | Reads the panic log region from the device tree and validates it |
 

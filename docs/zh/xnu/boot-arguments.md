@@ -42,7 +42,9 @@
 | `sheng-platform-stage=<n>` | 在平台专家固定阶段停住 |
 | `sheng-pmgr=<n>` | 选择板级 PMGR 集成 |
 | `native-ufs-root=1` | 使用原生 UFS 根路径 |
+| `native-ufs-partition=<name>` | 根分区的 GPT 名称，默认 `userdata`；payload 步骤按 `[userdata] partition` 设置 |
 | `native-ufs-stats-delay=<n>` | 延迟 UFS 统计读取 |
+| `native-ufs-smmu=1` | 保留固件对 UFS 流的 SMMU 映射，不再编程旁路上下文库；用于固件已映射该流并锁定上下文库寄存器的 SoC（SM8850） |
 | `armcpu-diagnostics=1` | 打印 CPU 和中断状态 |
 | `armcpu-spi-ipi=1` | 使用 SPI 路径发送核间中断 |
 | `sheng-smp=1` | 启动 secondary CPU |

@@ -141,7 +141,7 @@ package 步骤用 EDK II 构建 `package/`，输出到 `out/<board>/package/Buil
 
 ### userdata
 
-userdata 步骤构建 `userdata` 分区的原始镜像，保存 IPSW 中未修改的 `OS` 和 `SystemOS` 磁盘镜像，前置 `SHNGROOT` manifest。磁盘镜像用 `hdiutil` 只读挂载。输出为 `out/<board>/userdata/userdata-root.img` 和 `userdata-root.json`，报告会打印 `fastboot flash userdata` 命令。
+userdata 步骤构建 `userdata` 分区（或 `[userdata] partition` 指定的分区）的原始镜像，保存 IPSW 中未修改的 `OS` 和 `SystemOS` 磁盘镜像，前置 `SHNGROOT` manifest。磁盘镜像用 `hdiutil` 只读挂载。输出为 `out/<board>/userdata/userdata-root.img` 和 `userdata-root.json`，报告会打印该分区的 `fastboot flash` 命令。
 
 ### bootimg
 

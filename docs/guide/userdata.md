@@ -35,6 +35,15 @@ windows = [
 
 `first_lba` and `last_lba` come from the GPT entry named `userdata` on the device. `lba_bytes` is the logical block size of the partition.
 
+A device that keeps another OS in `userdata` sets aside a partition of its own and names it:
+
+```toml
+[userdata]
+partition = "unixnu"
+```
+
+The LBAs then come from that GPT entry. The payload step passes the name to the kernel as `native-ufs-partition`, the report prints the flash command for it, and `seed-data-grow.py --auto` measures it. NativeUfs finds the partition by its exact name and never falls back to `userdata`.
+
 The image size is the sum of the windows, each aligned to 1 MiB, plus the 1 MiB header region. The step rejects an image larger than the partition.
 
 ## Layout
@@ -64,7 +73,7 @@ Each window entry contains a 32-byte name, a 64-bit offset, a 64-bit size, a 32-
 fastboot flash userdata out/<board>/userdata/userdata-root.img
 ```
 
-The driver prints the command in the report. The device repository can provide a wrapper script that checks the image and partition before flashing.
+With `[userdata] partition`, flash that partition instead. The driver prints the command in the report. The device repository can provide a wrapper script that checks the image and partition before flashing.
 
 ## Root selection
 
@@ -91,7 +100,7 @@ A seed can grow to the tablet's storage without mounting a volume:
 python3 scripts/seed-data-grow.py --auto data.dbr data-grow.dbr
 ```
 
-`--auto` reads `fastboot getvar partition-size:userdata`, subtracts the root image, a 4 MiB guard, the log reserve and the store header and bitmap, rounds down to a whole GiB and keeps 1 GiB free. It needs `build/userdata-root/userdata-root.json` from the userdata build and a tablet in fastboot, unless `--userdata-bytes` is given. `--gib N` sets the size directly, `--userdata-bytes BYTES` skips the fastboot query, and `--reserve-mib` overrides the 1024 MiB log reserve. The accepted range is 3 to 1024 GiB.
+`--auto` reads `fastboot getvar partition-size:<partition>`, subtracts the root image, a 4 MiB guard, the log reserve and the store header and bitmap, rounds down to a whole GiB and keeps 1 GiB free. It needs `build/userdata-root/userdata-root.json` from the userdata build and a tablet in fastboot, unless `--userdata-bytes` is given. The partition is the one recorded in `userdata-root.json`, `userdata` without a report, or `--partition NAME`. `--gib N` sets the size directly, `--userdata-bytes BYTES` skips the fastboot query, and `--reserve-mib` overrides the 1024 MiB log reserve. The accepted range is 3 to 1024 GiB.
 
 The grown output keeps only the nonzero pages, so it is about as large as the input. The volume UUID is unchanged. The seed identity covers the size, so a different size starts the Data volume over. The kernel refuses a seed whose store window does not fit the real userdata partition.
 

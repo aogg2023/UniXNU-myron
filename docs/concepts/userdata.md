@@ -83,8 +83,9 @@ The persistent store serves the disk from a window at the end of the userdata pa
 | `image_sha256` | Image hash |
 | `manifest_sha256` | Manifest hash |
 | `windows` | Name, offset, size and hash of each window |
+| `partition` | GPT name of the root partition |
 | `userdata_bytes` | Partition capacity |
-| `flash_command` | `fastboot flash userdata <image>` |
+| `flash_command` | `fastboot flash <partition> <image>` |
 | `source` | Local or remote IPSW |
 | `hardware_tested` | Qualification state |
 

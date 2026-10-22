@@ -37,8 +37,9 @@ A device repository has four configuration files: `board.toml`, `configs/<name>_
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `first_lba` | integer | First LBA of the userdata GPT entry |
-| `last_lba` | integer | Last LBA of the userdata GPT entry |
+| `partition` | string | GPT name of the root partition, `userdata` by default |
+| `first_lba` | integer | First LBA of the root partition's GPT entry |
+| `last_lba` | integer | Last LBA of the root partition's GPT entry |
 | `lba_bytes` | integer | Logical block size |
 | `windows` | array | `{ name, component }` entries |
 

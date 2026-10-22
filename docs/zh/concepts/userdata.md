@@ -81,8 +81,9 @@ UUID 是 OS 窗口的卷 UUID。原生块驱动发布 userdata 分区，分区�
 | `image_sha256` | 镜像哈希 |
 | `manifest_sha256` | manifest 哈希 |
 | `windows` | 每个窗口的名称、偏移、大小和哈希 |
+| `partition` | 根分区的 GPT 名称 |
 | `userdata_bytes` | 分区容量 |
-| `flash_command` | `fastboot flash userdata <image>` |
+| `flash_command` | `fastboot flash <partition> <image>` |
 | `source` | 本地或远程 IPSW |
 | `hardware_tested` | 验证状态 |
 

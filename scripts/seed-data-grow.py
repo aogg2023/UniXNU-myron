@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Make a Data seed whose APFS container fills the tablet's storage: grow the container of an existing packed seed (DBRDISK1) to a chosen size.
 
-  seed-data-grow.py (--gib N | --auto [--userdata-bytes BYTES]) [--reserve-mib 1024] BASE.dbr OUTPUT.dbr
+  seed-data-grow.py (--gib N | --auto [--partition NAME] [--userdata-bytes BYTES]) [--reserve-mib 1024] BASE.dbr OUTPUT.dbr
 
 The same device ships with different storage sizes, so the size is chosen per build:
   --gib N        a container of exactly N GiB;
-  --auto         sized from the tablet's userdata partition: asks a tablet in fastboot (`fastboot getvar partition-size:userdata`, read only) or takes
-                 --userdata-bytes, and leaves out the root image (build/userdata-root/userdata-root.json), a 4 MiB guard, the log reserve
+  --auto         sized from the device's root partition: asks a device in fastboot (`fastboot getvar partition-size:NAME`, read only) or takes
+                 --userdata-bytes. NAME is --partition, else the partition recorded in the root image report, else userdata (a phone
+                 that keeps Android in userdata has its own partition for UniXNU). It leaves out the root image
+                 (build/userdata-root/userdata-root.json), a 4 MiB guard, the log reserve
                  (--reserve-mib, the sheng-log-reserve value of the image, default 1024; 0 = none) and the store's own header and bitmap, then
                  rounds down to a whole GiB and keeps one more GiB free.
 The container is grown on this Mac (a sparse raw image attached without mounting, `diskutil apfs resizeContainer`), then packed again: the output
@@ -33,16 +35,31 @@ GUARD_BLOCKS = 1024                      # NativeUfs keeps the store this far (4
 MAX_GIB = 1024                           # packed_ramdisk.MAX_LOGICAL
 
 
-def userdata_bytes_from_fastboot():
-    result = subprocess.run(['fastboot', 'getvar', 'partition-size:userdata'], capture_output=True, text=True, timeout=30)
-    match = re.search(r'partition-size:userdata:\s*(0x[0-9a-fA-F]+|\d+)', result.stdout + result.stderr)
+ROOT_REPORT = ROOT / 'build/userdata-root/userdata-root.json'
+
+
+def root_partition(name):
+    """--partition, else the partition the root image was built for, else userdata."""
+    if name is None and ROOT_REPORT.exists():
+        name = json.loads(ROOT_REPORT.read_text()).get('partition')
+    name = name or 'userdata'
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.\-]{0,34}', name):
+        sys.exit(f'{name!r} is not a partition name')
+    return name
+
+
+def userdata_bytes_from_fastboot(partition):
+    result = subprocess.run(['fastboot', 'getvar', f'partition-size:{partition}'], capture_output=True, text=True, timeout=30)
+    match = re.search(rf'partition-size:{re.escape(partition)}:\s*(0x[0-9a-fA-F]+|\d+)', result.stdout + result.stderr)
     if not match:
-        sys.exit('No tablet in fastboot answered partition-size:userdata; give --gib N or --userdata-bytes BYTES')
-    return int(match.group(1), 0)
+        sys.exit(f'No device in fastboot answered partition-size:{partition}; give --gib N or --userdata-bytes BYTES')
+    size = int(match.group(1), 0)
+    print(f'{partition}: {size} bytes', file=sys.stderr)
+    return size
 
 
 def root_image_bytes():
-    report = ROOT / 'build/userdata-root/userdata-root.json'
+    report = ROOT_REPORT
     if report.exists():
         for key in ('image_bytes', 'bytes', 'size'):
             value = json.loads(report.read_text()).get(key)
@@ -78,6 +95,7 @@ def main():
     size = parser.add_mutually_exclusive_group(required=True)
     size.add_argument('--gib', type=int)
     size.add_argument('--auto', action='store_true')
+    parser.add_argument('--partition')
     parser.add_argument('--userdata-bytes', type=lambda v: int(v, 0))
     parser.add_argument('--reserve-mib', type=int, default=1024)
     parser.add_argument('base', type=Path)
@@ -86,7 +104,7 @@ def main():
     if args.output.exists():
         sys.exit('Refuse to overwrite ' + str(args.output))
     if args.auto:
-        gib = auto_gib(args.userdata_bytes or userdata_bytes_from_fastboot(), args.reserve_mib)
+        gib = auto_gib(args.userdata_bytes or userdata_bytes_from_fastboot(root_partition(args.partition)), args.reserve_mib)
     else:
         gib = args.gib
     if not 3 <= gib <= MAX_GIB:

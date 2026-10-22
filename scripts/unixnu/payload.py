@@ -16,6 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .userdata import partition as root_partition
 from .util import Error, expand, log, run, sha256_file, tool
 
 EPOCH = 315532800   # 1980-01-01, the first FAT timestamp; keeps the volume reproducible
@@ -35,6 +36,20 @@ def check_args(arguments):
     if len(line) > 1000:
         raise Error(f'the kernel command line is {len(line)} bytes; the limit is 1000')
     return line
+
+
+def add_root_partition(board, arguments):
+    """NativeUfs finds the root partition by its GPT name: pass [userdata] partition when it is not "userdata"."""
+    spec = board.get('userdata')
+    if not spec:
+        return arguments
+    name = root_partition(spec)
+    given = [item.split('=', 1)[1] for item in arguments if item.startswith('native-ufs-partition=')]
+    if any(value != name for value in given):
+        raise Error(f'native-ufs-partition={given[-1]} contradicts board.toml [userdata] partition = "{name}"')
+    if name != 'userdata' and not given:
+        arguments = arguments + [f'native-ufs-partition={name}']
+    return arguments
 
 
 def check_native_root(kernel, arguments):
@@ -94,6 +109,7 @@ def build(ctx, kernel=None):
     # An extra NAME=VALUE replaces the board's argument of the same name.
     names = {item.split('=', 1)[0] for item in extra}
     arguments = [item for item in spec.get('kernel_args', []) if item.split('=', 1)[0] not in names] + extra
+    arguments = add_root_partition(ctx.board, arguments)
     line = check_args(arguments)
     check_native_root(kernel, arguments)
     owner_trust = getattr(args, 'owner_trust_cache', None)

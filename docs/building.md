@@ -183,9 +183,9 @@ The kernel command line comes from `[payload] kernel_args`. An extra `--kernel-a
 
 ### userdata
 
-The userdata step builds the raw image for the `userdata` partition. It holds the unchanged `OS` and `SystemOS` disk images of the IPSW behind the `SHNGROOT` manifest. The disk images are attached read-only with `hdiutil`. The output is `out/<board>/userdata/userdata-root.img` with `userdata-root.json`.
+The userdata step builds the raw image for the `userdata` partition, or the partition `[userdata] partition` names. It holds the unchanged `OS` and `SystemOS` disk images of the IPSW behind the `SHNGROOT` manifest. The disk images are attached read-only with `hdiutil`. The output is `out/<board>/userdata/userdata-root.img` with `userdata-root.json`.
 
-The report prints the `fastboot flash userdata` command.
+The report prints the `fastboot flash` command for that partition.
 
 ### bootimg
 

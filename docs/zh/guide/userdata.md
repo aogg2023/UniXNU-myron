@@ -35,6 +35,15 @@ windows = [
 
 `first_lba` 和 `last_lba` 来自设备上名为 `userdata` 的 GPT 条目，`lba_bytes` 是分区逻辑块大小。
 
+如果设备的 `userdata` 里保留着另一个系统，就为 UniXNU 单独划出一个分区并写明名称：
+
+```toml
+[userdata]
+partition = "unixnu"
+```
+
+此时 LBA 来自该 GPT 条目。payload 步骤把名称作为 `native-ufs-partition` 传给内核，报告打印该分区的刷写命令，`seed-data-grow.py --auto` 也测量该分区。NativeUfs 按名称精确查找分区，不会退回到 `userdata`。
+
 镜像大小为各窗口按 1 MiB 对齐后的总和，加上 1 MiB 头部区域。步骤拒绝超过分区容量的镜像。
 
 ## 布局
@@ -64,7 +73,7 @@ manifest 为小端：
 fastboot flash userdata out/<board>/userdata/userdata-root.img
 ```
 
-驱动把命令写入报告。设备仓库可以提供封装脚本，在刷写前检查镜像和分区。
+设置了 `[userdata] partition` 时改为刷写该分区。驱动把命令写入报告。设备仓库可以提供封装脚本，在刷写前检查镜像和分区。
 
 ## 根卷选择
 
@@ -91,7 +100,7 @@ ADT 生成器写入 `/chosen/root-matching`，包含 `IOProviderClass = IOMedia`
 python3 scripts/seed-data-grow.py --auto data.dbr data-grow.dbr
 ```
 
-`--auto` 读取 `fastboot getvar partition-size:userdata`，减去根镜像、4 MiB guard、日志保留区和 store header 与 bitmap，向下取整到整 GiB，并保留 1 GiB 余量。它需要 userdata 构建生成的 `build/userdata-root/userdata-root.json` 和处于 fastboot 的平板，除非给出 `--userdata-bytes`。`--gib N` 直接指定大小，`--userdata-bytes BYTES` 跳过 fastboot 查询，`--reserve-mib` 覆盖默认 1024 MiB 日志保留区。范围为 3 到 1024 GiB。
+`--auto` 读取 `fastboot getvar partition-size:<partition>`，减去根镜像、4 MiB guard、日志保留区和 store header 与 bitmap，向下取整到整 GiB，并保留 1 GiB 余量。它需要 userdata 构建生成的 `build/userdata-root/userdata-root.json` 和处于 fastboot 的平板，除非给出 `--userdata-bytes`。分区取 `userdata-root.json` 中记录的分区，没有报告时为 `userdata`，也可用 `--partition NAME` 指定。`--gib N` 直接指定大小，`--userdata-bytes BYTES` 跳过 fastboot 查询，`--reserve-mib` 覆盖默认 1024 MiB 日志保留区。范围为 3 到 1024 GiB。
 
 增长后的输出只保留非零页，大小接近输入。卷 UUID 不变。种子身份包含大小，所以改变大小会重新开始 Data 卷。store 窗口不适合真实 userdata 分区时，内核拒绝该种子。
 

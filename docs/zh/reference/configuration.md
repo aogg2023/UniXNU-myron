@@ -37,8 +37,9 @@
 
 | 键 | 类型 | 含义 |
 | --- | --- | --- |
-| `first_lba` | 整数 | userdata GPT 条目起始 LBA |
-| `last_lba` | 整数 | userdata GPT 条目结束 LBA |
+| `partition` | 字符串 | 根分区的 GPT 名称，默认 `userdata` |
+| `first_lba` | 整数 | 根分区 GPT 条目起始 LBA |
+| `last_lba` | 整数 | 根分区 GPT 条目结束 LBA |
 | `lba_bytes` | 整数 | 逻辑块大小 |
 | `windows` | 数组 | `{ name, component }` 条目 |
 

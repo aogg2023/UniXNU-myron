@@ -102,7 +102,7 @@ cpu0 {
 }
 ```
 
-第一个 CPU 是启动 CPU，`reg` 是 MPIDR affinity 值。多于一个 CPU 时加入 `/psci` 节点，`compatible = "arm,psci-1.0"`，`method` 为 `"smc"` 或 `"hvc"`。
+第一个 CPU 是启动 CPU，`reg` 是 MPIDR affinity 值，含 Affinity0 到 Affinity2。在 Affinity2 中编号 cluster 的 SoC（例如 `0x10000`）保留该值。多于一个 CPU 时加入 `/psci` 节点，`compatible = "arm,psci-1.0"`，`method` 为 `"smc"` 或 `"hvc"`。
 
 ### arm-io
 

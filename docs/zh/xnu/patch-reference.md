@@ -23,6 +23,7 @@
 | `architectural-timer-entry` | 启用原生架构定时器时跳过 BCM2837 定时器路由 |
 | `armvirt-platform-personality` | 加入 `ArmCpu`、`ArmVirtPlatform` 和 `ArmDTPlatform` personality |
 | `native-smp-secondary` | `MAX_CPUS` 提高到 8，BCM2837 secondary CPU 使用 MPIDR Affinity1 |
+| `native-smp-wide-affinity` | reset handler 和 `ml_get_cpu_number` 按 MPIDR Affinity0 到 Affinity2 匹配 BCM2837 CPU |
 | `native-arm-pan` | 设置 `XNU_NATIVE_PAN` 时启用 ARMv8.1 PAN |
 | `native-dt-panic-region` | 从设备树读取并校验 panic 日志区域 |
 

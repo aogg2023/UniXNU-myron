@@ -2,7 +2,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index a5ff474..4704203 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7193,6 +7193,321 @@ uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
+@@ -7193,6 +7193,330 @@ uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
  uint8_t native_owner_data_seed_sha256[32];
  char native_owner_data_device_path[64];
  
@@ -19,6 +19,8 @@ index a5ff474..4704203 100644
 +volatile int native_gpu_addon2_status = -1;
 +volatile int native_gpu_addon3_stage = 0;
 +volatile int native_gpu_addon3_status = -1;
++volatile int native_gpu_addon4_stage = 0;
++volatile int native_gpu_addon4_status = -1;
 +static void
 +native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
 +    const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
@@ -309,16 +311,23 @@ index a5ff474..4704203 100644
 +	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
 +	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
 +	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
-+	/* The default iPadOS 17 wallpaper's layered animation with PNG images in place of its HEIC ones (no hardware HEVC decoder here).
-+	 * The overlay carries the animation's documents and the PNG images; the sealed assets directory stays visible below it. */
-+	static const char wallpaper_source[] = "/private/var/ngpu/wallpaper",
-+	    wallpaper_point[] = "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/"
-+	    "7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca";
-+	native_gpu_addon_mount(p, scratch, 0x800, wallpaper_source, sizeof(wallpaper_source), wallpaper_point, sizeof(wallpaper_point),
-+	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
-+	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
-+	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
-+	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
++	/* Collections~<idiom>.plist is the collection index; the iPad image ships only the ipad one. */
++	static const char wallpaper_collections_source[] = "/private/var/ngpu/wallpapercollection",
++	    wallpaper_collections_point[] = "/Library/Wallpaper/Collections";
++	native_gpu_addon_mount(p, scratch, 0xa00, wallpaper_collections_source, sizeof(wallpaper_collections_source),
++	    wallpaper_collections_point, sizeof(wallpaper_collections_point),
++	    "/Library/Wallpaper/Collections/Collections~ipad.plist",
++	    "/Library/Wallpaper/Collections/Collections~iphone.plist",
++	    &native_gpu_addon4_stage, &native_gpu_addon4_status);
++	/* The default-wallpaper table is idiom-suffixed too (DefaultWallpapers~ipad.plist): under the phone identity
++	 * WallpaperKit looks for DefaultWallpapers~iphone.plist, finds none and leaves the background black. The union adds
++	 * the phone-side copies over the sealed /Library/Wallpaper; the stock files stay visible below it. */
++	static const char wallpaper_defaults_source[] = "/private/var/ngpu/wallpaperdefaults",
++	    wallpaper_defaults_point[] = "/Library/Wallpaper";
++	native_gpu_addon_mount(p, scratch, 0x800, wallpaper_defaults_source, sizeof(wallpaper_defaults_source),
++	    wallpaper_defaults_point, sizeof(wallpaper_defaults_point),
++	    "/Library/Wallpaper/Collections/Collections~ipad.plist",
++	    "/Library/Wallpaper/DefaultWallpapers~iphone.plist", &native_gpu_addon3_stage, &native_gpu_addon3_status);
 +}
 +
  static int

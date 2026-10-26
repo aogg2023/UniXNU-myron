@@ -6,7 +6,10 @@
 The files are the ones add-gpu-plugin-data.py stages into a Data seed, with the same paths below /private/var/ngpu and the same modes:
 addons/NativeAdrenoMetal.bundle/*, addons/NativeAdrenoMetal.publish (--publish), addons/NativeAdrenoMetal.clients (--clients),
 bin/adrenoprobed and daemons/*.plist. --wallpaper adds the files of DIR (scripts/make-wallpaper-overlay.py) as wallpaper/*, which the
-kernel mounts over the default wallpaper's layered animation. --prime-list adds FILE (the absolute paths of the OS image's .metallib
+kernel mounts over the default wallpaper's layered animation; --wallpaper-collections adds DIR as wallpapercollection/*, mounted over
+/Library/Wallpaper/Collections (its Collections~iphone.plist is the phone-side index WallpaperKit looks for);
+--wallpaper-defaults adds DIR as wallpaperdefaults/*, mounted over /Library/Wallpaper (its DefaultWallpapers~iphone.plist
+is the phone-side default-wallpaper table). --prime-list adds FILE (the absolute paths of the OS image's .metallib
 files, one per line) as addons/NativeAdrenoMetal.primelist, the libraries the render server compiles ahead (PrimeShaders.h). The payload carries the file next to the kernel (unixnu build payload --gpu-addon), the loader
 hands it to the kernel as /chosen/memory-map/GpuAddon, and the kernel writes every file whose content or mode differs into the mounted
 Data volume before its addon mounts (sheng-gpu-addon=1). The Data seed then no longer changes with the plugin, so its persistent store
@@ -42,6 +45,20 @@ def main():
         del args[at:at + 2]
         if not wallpaper.is_dir():
             sys.exit('--wallpaper takes a directory')
+    wallpaper_defaults = None
+    if '--wallpaper-defaults' in args:
+        at = args.index('--wallpaper-defaults')
+        wallpaper_defaults = Path(args[at + 1])
+        del args[at:at + 2]
+        if not wallpaper_defaults.is_dir():
+            sys.exit('--wallpaper-defaults takes a directory')
+    wallpaper_collections = None
+    if '--wallpaper-collections' in args:
+        at = args.index('--wallpaper-collections')
+        wallpaper_collections = Path(args[at + 1])
+        del args[at:at + 2]
+        if not wallpaper_collections.is_dir():
+            sys.exit('--wallpaper-collections takes a directory')
     prime_list = None
     if '--prime-list' in args:
         at = args.index('--prime-list')
@@ -71,6 +88,9 @@ def main():
         files.append(('addons/NativeAdrenoMetal.publish', 0o644, b'1\n'))
     if clients:
         files.append(('addons/NativeAdrenoMetal.clients', 0o644, ('\n'.join(clients) + '\n').encode()))
+    tudebug = BUNDLE.parent / 'NativeAdrenoMetal.tudebug'
+    if tudebug.is_file():   # beside the bundle: the plugin's requestedPath looks there, not inside the sealed bundle
+        files.append(('addons/NativeAdrenoMetal.tudebug', 0o644, tudebug.read_bytes()))
     if prime_list:
         files.append(('addons/NativeAdrenoMetal.primelist', 0o644, prime_list.read_bytes()))
     files.append(('bin/adrenoprobed', 0o755, (PLUGIN / 'adrenoprobed').read_bytes()))
@@ -80,6 +100,12 @@ def main():
     if wallpaper:
         for path in sorted(p for p in wallpaper.rglob('*') if p.is_file()):
             files.append(('wallpaper/' + path.relative_to(wallpaper).as_posix(), 0o644, path.read_bytes()))
+    if wallpaper_collections:
+        for path in sorted(p for p in wallpaper_collections.rglob('*') if p.is_file()):
+            files.append(('wallpapercollection/' + path.relative_to(wallpaper_collections).as_posix(), 0o644, path.read_bytes()))
+    if wallpaper_defaults:
+        for path in sorted(p for p in wallpaper_defaults.rglob('*') if p.is_file()):
+            files.append(('wallpaperdefaults/' + path.relative_to(wallpaper_defaults).as_posix(), 0o644, path.read_bytes()))
     body = b''
     for name, mode, data in files:
         encoded = name.encode() + b'\0'

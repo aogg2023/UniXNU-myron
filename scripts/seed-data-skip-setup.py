@@ -2,7 +2,7 @@
 """Make a Data seed that boots to SpringBoard instead of Setup: the preference changes github.com/dipa-studio/ios-sweet
 (tools/sweet-root-tweaks.py) established on hardware, applied to a copy of an existing packed Data seed.
 
-  seed-data-skip-setup.py BASE.dbr OUTPUT.dbr [--no-auto-dim]
+  seed-data-skip-setup.py BASE.dbr OUTPUT.dbr [--no-auto-dim] [--migration-pending]
 
 BASE is a DBRDISK1 packed APFS container (drivers/DarwinBoot/Test/packed_ramdisk.py format). It is expanded to a raw image, attached
 read-write on this Mac, the preference files below are merged into /private/var/mobile/Library/Preferences, and the result is packed
@@ -16,6 +16,11 @@ and the container directories under /private/var/containers that on a device liv
 --no-auto-dim also sets com.apple.springboard SBDisableAutoDim, SBDontDimOrLockOnAC and SBDisableIdleSleep (as UniXNU-qemu's
 build-os-root.py does): a board without input would otherwise turn its display off about 30 seconds after SpringBoard starts
 and put the system to sleep.
+--migration-pending records an older LastSystemVersion instead, so DataMigrator sees that the build changed and runs its
+first-boot migration plugins. Those plugins include SystemAppMigrator, which expands the removable system apps waiting in
+/private/var/staged_system_apps into containers/Bundle/Application and lets SpringBoard reach
+FBSServiceMilestoneDataMigrationCompleted. With a persistent Data volume the migration records the running build, so the
+next boot migrates nothing; with the RAM seed every boot migrates.
 """
 import hashlib, json, os, plistlib, subprocess, sys, tempfile
 from pathlib import Path
@@ -25,6 +30,7 @@ sys.path.insert(0, str(ROOT / 'drivers/DarwinBoot/Test'))
 import packed_ramdisk
 
 BUILD, VERSION = '21H461', '17.7.11'
+MIGRATION_BASE = '20A000'        # an older build than any 21H…: --migration-pending makes DataMigrator see a build change
 MOBILE = 501
 
 def merge_pref(var, name, values):
@@ -37,8 +43,10 @@ def merge_pref(var, name, values):
     print('pref', name, sorted(values))
 
 def main():
+    flags = {'--no-auto-dim', '--migration-pending'}
     no_auto_dim = '--no-auto-dim' in sys.argv[1:]
-    positional = [arg for arg in sys.argv[1:] if arg != '--no-auto-dim']
+    migration_pending = '--migration-pending' in sys.argv[1:]
+    positional = [arg for arg in sys.argv[1:] if arg not in flags]
     if len(positional) != 2:
         sys.exit(__doc__)
     base, output = Path(positional[0]).resolve(), Path(positional[1]).resolve()
@@ -63,7 +71,7 @@ def main():
             if not (mount / 'mobile').is_dir():
                 sys.exit('The Data seed has no /mobile; wrong base image?')
             merge_pref(mount, 'com.apple.migration', {
-                'LastSystemVersion': BUILD,
+                'LastSystemVersion': MIGRATION_BASE if migration_pending else BUILD,
                 'DMUserDataDisposition': {'SyntheticDidUpgrade': False, 'buildVersion': BUILD}})
             merge_pref(mount, 'com.apple.springboard', {
                 'BKNoWatchdogs': True,
@@ -92,7 +100,8 @@ def main():
     report = dict(base_sha256=packed_ramdisk.inspect(base)[0]['sha256'], output=metadata,
                   preferences=['com.apple.migration', 'com.apple.springboard', 'com.apple.purplebuddy',
                                'com.apple.purplebuddy.notbackedup', 'com.apple.managedconfiguration.notbackedup'],
-                  no_auto_dim=no_auto_dim, build=BUILD, source='github.com/dipa-studio/ios-sweet tools/sweet-root-tweaks.py')
+                  no_auto_dim=no_auto_dim, migration_pending=migration_pending, build=BUILD,
+                  source='github.com/dipa-studio/ios-sweet tools/sweet-root-tweaks.py')
     output.with_suffix('.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 

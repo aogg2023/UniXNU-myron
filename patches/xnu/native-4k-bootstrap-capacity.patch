@@ -1,14 +1,16 @@
 --- a/osfmk/arm/pmap/pmap.h
 +++ b/osfmk/arm/pmap/pmap.h
-@@ -115,6 +115,11 @@
+@@ -115,6 +115,13 @@
   * Upper limit on how many pages can be consumed by bootstrap page tables
   */
  #define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 34)
 +#elif !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
-+/* Native 4 KiB: two roots plus up to seven L2 pages per 6 GiB mapping.
-+ * The physical and virtual bases may each straddle an extra 1 GiB region.
++/* Native 4 KiB: two roots plus two sets of L2 pages (the physical and the virtual view), one L2 page per 1 GiB of
++ * each. 34 pages match Apple's large-memory pool and cover an owned-memory run of 16 GiB per view; the old 16 could
++ * not map an 8 GiB run (8+8 L2 pages + 2 roots), which stopped the kernel in Lbootstrap_tables_exhausted with the MMU
++ * still off.
 + */
-+#define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 16)
++#define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 34)
  #else /* defined(ARM_LARGE_MEMORY) */
  #define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 8)
  #endif /* defined(ARM_LARGE_MEMORY) */

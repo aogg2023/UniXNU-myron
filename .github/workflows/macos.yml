@@ -205,7 +205,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ inputs.defconfig }}
-          path: out/**/logs/**
+          path: |
+            out/*/logs/**
+            out/*/tree/logs/**
+            out/*/kernel/**/*.json
+            out/*/payload/**/*.json
+            out/*/tree/build/*.log
           if-no-files-found: ignore
           retention-days: 7
 

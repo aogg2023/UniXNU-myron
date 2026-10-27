@@ -151,7 +151,9 @@ jobs:
         run: |
           args=()
           if [ -n "$IPSW_URL" ]; then args+=(--ipsw "$IPSW_URL"); fi
-          ./unixnu build kernel "${args[@]}"
+          # A fresh runner has no link.filelist for the archive builders yet, so the first pass
+          # can fail at the final link; the archives it built make the second pass succeed.
+          ./unixnu build kernel "${args[@]}" || ./unixnu build kernel "${args[@]}"
 
       - name: Build userdata
         if: contains(inputs.steps, 'userdata')

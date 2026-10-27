@@ -70,6 +70,8 @@ env:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4

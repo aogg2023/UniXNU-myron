@@ -1,4 +1,4 @@
-name: songyuan-uefi
+name: songyuan-payload
 on:
   workflow_dispatch:
 
@@ -11,7 +11,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
-      - name: clone the hackios tree (port files and paint scripts)
+          command -v lld-link || sudo ln -sf /usr/bin/ld.lld /usr/local/bin/lld-link
+      - name: clone the hackios tree
         run: |
           git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
       - name: clone Mu-Silicium HEAD
@@ -21,22 +22,30 @@ jobs:
       - name: overlay the songyuan port
         run: |
           cp -r hk/uefi/songyuan2/files/. Mu-Silicium/
-      - name: stage markers
+      - name: hook the XNU loader into BootManager
         run: |
-          python3 hk/uefi/songyuan/paint_stages.py pei Mu-Silicium/Silicon/Qualcomm/QcomPkg/Library/PlatformPeiLib/PlatformPei.c
-          python3 hk/uefi/songyuan/paint_stages.py dxe Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
-          grep -c "songyuan stage marker" Mu-Silicium/Silicon/Qualcomm/QcomPkg/Library/PlatformPeiLib/PlatformPei.c Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
-      - name: BDS bring-up markers
+          python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf
+          grep -c XnuLoaderMain Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+      - name: build the loader
+        env:
+          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
         run: |
-          python3 hk/uefi/songyuan/paint_bootmanager.py Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
-          grep -c 'songyuan uefi marker' Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
-      - name: build the shim with the paint
+          cd hk/xnuloader
+          export BUILD_ID=$(git -C ../.. rev-parse HEAD)
+          bash build.sh
+          ls -l loader-phone.efi
+      - name: build the shim (strict, copies the payload)
         run: |
           cd Mu-Silicium/BootShim
-          python3 ../../hk/uefi/songyuan/paint_shim.py BootShim.S
-          grep -c '_ShimPaint' BootShim.S
-          make REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 CFLAGS="--target=aarch64-linux-gnu"
+          make REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=0xF0000000 -DPAYLOAD_CAP=0x3700000"
           ls -l BootShim.bin
+      - name: pack the payload
+        run: |
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+          ls -l payload.bin
       - name: nasm shim and venv
         run: |
           D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
@@ -60,10 +69,9 @@ jobs:
           if len(fd) != fd_size:
               fd = fd + b'\0' * (fd_size - len(fd))
           shim = open('Mu-Silicium/BootShim/BootShim.bin','rb').read()
-          print('shim', len(shim))
-          blob = shim + fd
-          dtb = open('hk/uefi/songyuan2/files/Resources/DTBs/songyuan.dtb','rb').read()
-          blob += dtb
+          payload = open('payload.bin','rb').read()
+          print('shim', len(shim), 'payload', len(payload))
+          blob = shim + fd + payload
           blob += b'\0' * (-len(blob) % 16)
           H = 0x800
           hdr = bytearray(H)
@@ -74,11 +82,13 @@ jobs:
           image = bytes(hdr) + blob
           boot = struct.pack('<8sIIII4II1536sI', b'ANDROID!', len(image), 0, 0, 1584, 0, 0, 0, 0, 4, b'', 0)
           pad = lambda b: b + b'\0' * (-len(b) % 4096)
-          open('out-songyuan-marker.img','wb').write(pad(boot) + pad(image))
-          print('image', os.path.getsize('out-songyuan-marker.img'))
+          open('out-songyuan-payload.img','wb').write(pad(boot) + pad(image))
+          print('image', os.path.getsize('out-songyuan-payload.img'))
           EOF
       - uses: actions/upload-artifact@v4
         with:
-          name: songyuan-marker-image
-          path: out-songyuan-marker.img
+          name: songyuan-payload-image
+          path: |
+            out-songyuan-payload.img
+            hk/xnuloader/loader-phone.efi
           if-no-files-found: error

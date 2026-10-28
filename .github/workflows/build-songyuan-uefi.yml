@@ -33,7 +33,7 @@ jobs:
           EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
         run: |
           cd hk/xnuloader
-          export BUILD_ID=$(git -C ../.. rev-parse HEAD)
+          export BUILD_ID=$(git -C .. rev-parse HEAD)
           bash build.sh
           ls -l loader-phone.efi
       - name: build the shim (strict, copies the payload)

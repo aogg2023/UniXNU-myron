@@ -1,0 +1,79 @@
+name: songyuan-uefi
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
+      - name: clone the hackios tree (port files and paint scripts)
+        run: |
+          git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
+      - name: clone Mu-Silicium HEAD
+        run: |
+          git clone --recursive --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          echo "mu at $(git -C Mu-Silicium rev-parse --short HEAD)"
+      - name: overlay the songyuan port
+        run: |
+          cp -r hk/uefi/songyuan2/files/. Mu-Silicium/
+      - name: BDS bring-up markers
+        run: |
+          python3 hk/uefi/songyuan/paint_bootmanager.py Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+          grep -c 'songyuan uefi marker' Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+      - name: build the shim with the paint
+        run: |
+          cd Mu-Silicium/BootShim
+          python3 ../../hk/uefi/songyuan/paint_shim.py BootShim.S
+          grep -c '_ShimPaint' BootShim.S
+          make FD_BASE=0xA7100000 FD_SIZE=0x300000 CFLAGS="--target=aarch64-linux-gnu"
+          ls -l BootShim.bin
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d songyuan -r RELEASE
+      - name: pack the boot image
+        run: |
+          python3 - <<'EOF'
+          import os, struct
+          fd_size = 0x300000
+          fd = open('Mu-Silicium/Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd','rb').read()
+          print('FD', len(fd), 'expected', fd_size)
+          if len(fd) != fd_size:
+              fd = fd + b'\0' * (fd_size - len(fd))
+          shim = open('Mu-Silicium/BootShim/BootShim.bin','rb').read()
+          print('shim', len(shim))
+          blob = shim + fd
+          dtb = open('hk/uefi/songyuan2/files/Resources/DTBs/songyuan.dtb','rb').read()
+          blob += dtb
+          blob += b'\0' * (-len(blob) % 16)
+          H = 0x800
+          hdr = bytearray(H)
+          struct.pack_into('<I', hdr, 0, 0x14000000 | (H // 4))
+          struct.pack_into('<Q', hdr, 0x10, H + len(blob))
+          struct.pack_into('<Q', hdr, 0x18, 0xA)
+          hdr[0x38:0x3C] = b'ARM\x64'
+          image = bytes(hdr) + blob
+          boot = struct.pack('<8sIIII4II1536sI', b'ANDROID!', len(image), 0, 0, 1584, 0, 0, 0, 0, 4, b'', 0)
+          pad = lambda b: b + b'\0' * (-len(b) % 4096)
+          open('out-songyuan-marker.img','wb').write(pad(boot) + pad(image))
+          print('image', os.path.getsize('out-songyuan-marker.img'))
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: songyuan-marker-image
+          path: out-songyuan-marker.img
+          if-no-files-found: error

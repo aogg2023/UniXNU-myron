@@ -21,6 +21,11 @@ jobs:
       - name: overlay the songyuan port
         run: |
           cp -r hk/uefi/songyuan2/files/. Mu-Silicium/
+      - name: stage markers
+        run: |
+          python3 hk/uefi/songyuan/paint_stages.py pei Mu-Silicium/Silicon/Qualcomm/QcomPkg/Library/PlatformPeiLib/PlatformPei.c
+          python3 hk/uefi/songyuan/paint_stages.py dxe Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
+          grep -c "songyuan stage marker" Mu-Silicium/Silicon/Qualcomm/QcomPkg/Library/PlatformPeiLib/PlatformPei.c Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c
       - name: BDS bring-up markers
         run: |
           python3 hk/uefi/songyuan/paint_bootmanager.py Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c

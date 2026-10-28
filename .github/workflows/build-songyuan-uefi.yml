@@ -28,9 +28,7 @@ jobs:
       - name: build the shim with the paint
         run: |
           cd Mu-Silicium/BootShim
-          python3 ../../hk/uefi/songyuan/paint_shim.py BootShim.S
-          grep -c '_ShimPaint' BootShim.S
-          make FD_BASE=0xA7100000 FD_SIZE=0x300000 CFLAGS="--target=aarch64-linux-gnu"
+          make REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 CFLAGS="--target=aarch64-linux-gnu"
           ls -l BootShim.bin
       - name: nasm shim and venv
         run: |

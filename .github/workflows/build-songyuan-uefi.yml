@@ -1,4 +1,4 @@
-name: songyuan-payload
+name: songyuan3
 on:
   workflow_dispatch:
 
@@ -12,16 +12,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
           command -v lld-link || sudo ln -sf /usr/bin/ld.lld /usr/local/bin/lld-link
-      - name: clone the hackios tree
+      - name: clone the hackios helpers
         run: |
           git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
       - name: clone Mu-Silicium HEAD
         run: |
           git clone --recursive --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
           echo "mu at $(git -C Mu-Silicium rev-parse --short HEAD)"
+      - name: vendor binaries (infiniti = OnePlus 15, SM8850; the same base as myronPkg)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set infiniti && cd ..
+          cp -r devbin/infiniti Mu-Silicium/Binaries/songyuan
+          ls Mu-Silicium/Binaries/songyuan | head
       - name: overlay the songyuan port
         run: |
-          cp -r hk/uefi/songyuan2/files/. Mu-Silicium/
+          cp -r hk/uefi/songyuan3/files/. Mu-Silicium/
       - name: hook the XNU loader into BootManager
         run: |
           python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
@@ -36,10 +42,10 @@ jobs:
           export BUILD_ID=$(git -C .. rev-parse HEAD)
           bash build.sh
           ls -l loader-phone.efi
-      - name: build the shim (strict, copies the payload)
+      - name: build the shim (strict, FD at 0xC6900000)
         run: |
           cd Mu-Silicium/BootShim
-          make REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 \
+          make REQUIRES_KERNEL_HEADER=1 FD_BASE=0xC6900000 FD_SIZE=0x300000 \
             CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=0xF0000000 -DPAYLOAD_CAP=0x3700000"
           ls -l BootShim.bin
       - name: pack the payload
@@ -59,36 +65,44 @@ jobs:
           cd Mu-Silicium
           source ../venv/bin/activate
           python3 build_uefi.py -d songyuan -r RELEASE
-      - name: pack the boot image
+      - name: pack the v0 boot image
         run: |
           python3 - <<'EOF'
-          import os, struct
+          import gzip, os, struct
           fd_size = 0x300000
           fd = open('Mu-Silicium/Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd','rb').read()
           print('FD', len(fd), 'expected', fd_size)
-          if len(fd) != fd_size:
-              fd = fd + b'\0' * (fd_size - len(fd))
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          elif len(fd) > fd_size:
+              raise SystemExit('FD larger than the configured size')
           shim = open('Mu-Silicium/BootShim/BootShim.bin','rb').read()
           payload = open('payload.bin','rb').read()
-          print('shim', len(shim), 'payload', len(payload))
+          payload += b'\0' * (-len(payload) % 16)
           blob = shim + fd + payload
-          blob += b'\0' * (-len(blob) % 16)
-          H = 0x800
-          hdr = bytearray(H)
-          struct.pack_into('<I', hdr, 0, 0x14000000 | (H // 4))
-          struct.pack_into('<Q', hdr, 0x10, H + len(blob))
-          struct.pack_into('<Q', hdr, 0x18, 0xA)
-          hdr[0x38:0x3C] = b'ARM\x64'
-          image = bytes(hdr) + blob
-          boot = struct.pack('<8sIIII4II1536sI', b'ANDROID!', len(image), 0, 0, 1584, 0, 0, 0, 0, 4, b'', 0)
-          pad = lambda b: b + b'\0' * (-len(b) % 4096)
-          open('out-songyuan-payload.img','wb').write(pad(boot) + pad(image))
-          print('image', os.path.getsize('out-songyuan-payload.img'))
+          dtb = open('Mu-Silicium/Resources/DTBs/songyuan.dtb','rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          print('shim', len(shim), 'payload', len(payload), 'blob', len(blob), 'kernel field', len(kernelfield))
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))
+          struct.pack_into('<I', hdr, 12, 0x8000)
+          struct.pack_into('<I', hdr, 16, 0)
+          struct.pack_into('<I', hdr, 20, 0)
+          struct.pack_into('<I', hdr, 24, 0)
+          struct.pack_into('<I', hdr, 28, 0)
+          struct.pack_into('<I', hdr, 32, 0x1e00000)
+          struct.pack_into('<I', hdr, 36, PAGE)
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-songyuan-v0.img','wb').write(img)
+          print('image', len(img))
           EOF
       - uses: actions/upload-artifact@v4
         with:
-          name: songyuan-payload-image
+          name: songyuan3-image
           path: |
-            out-songyuan-payload.img
+            out-songyuan-v0.img
             hk/xnuloader/loader-phone.efi
           if-no-files-found: error

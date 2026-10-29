@@ -1,0 +1,250 @@
+name: songyuan-uefi-dt
+
+# DT-aligned songyuan (Redmi K90 Pro Max, Qualcomm SM8850 "canoe") UEFI firmware.
+#
+# This is the working songyuan3 recipe (build-songyuan-uefi.yml) with the platform
+# package replaced by aogg2023/songyuan-uefi (Xiaomi/songyuanPkg, DT-reconciled
+# MemoryMapLib) and the UEFI FD moved to 0xA7100000.  Values and where they come from:
+#
+#   FD base/size      0xA7100000 / 0x300000
+#                     - Resources/Configs/songyuan.toml [uefi_fd] (overlaid from songyuan-uefi)
+#                     - reserved by Platforms/Xiaomi/songyuanPkg/Library/MemoryMapLib/MemoryMapLib.c
+#                       entries FD_Reserved (0xA7000000/0x100000), UEFI_FD (0xA7100000/0x300000),
+#                       UEFI_FD_Reserved (0xA7400000/0x200000), all MemoryType BsData
+#   XNU payload       0xF0000000, BootShim PAYLOAD_CAP 0x3700000
+#                     - hackios-xnu-kernel (k90-port) uefi/songyuan3/files/Silicon/Silicium/
+#                       SiliciumPkg/Library/BootManagerLib/XnuLoader.h:
+#                       XNU_PAYLOAD_BASE=0xF0000000, XNU_PAYLOAD_REGION_SIZE=0x03800000,
+#                       XNU_PAYLOAD_MAX_SIZE=0x03700000 (container incl. header)
+#                     - the same 0x03800000 window is the MemoryMapLib XNU_Payload entry
+#                       (reserved in PEI before DXE can allocate over the shim copy)
+#   boot image        header v0, kernel field = gzip(BootShim+FD+payload) + base DTB appended
+#                     - hackios-songyuan docs/UEFI-BRINGUP-ANALYSIS.md section 5 (v0 needed on
+#                       this ABL: v4 loads init_boot's ramdisk instead of the boot.img payload)
+#                     - pack step copied from build-songyuan-uefi.yml (kernel addr 0x8000,
+#                       tags 0x1e00000, page 4096); only the FD size/base feeding the build change
+#   Mu-Silicium       pinned to 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+#                     - the commit the existing build-songyuan-uefi.yml logged ("mu at 4cba43c")
+#                       in its last successful run (40630461302, 2026-10-28)
+#   DTB               Resources/DTBs/songyuan.dtb from hk/uefi/songyuan3/files
+#                     sha256 25e11235cd6be71cd2774d81fc7dc2517c67cfe87862d99f794d969d4b022348
+#
+# The overlaid songyuanPkg is the upstream astonPkg renamed (Include/*.inc are byte-identical
+# to Platforms/OnePlus/astonPkg), so its INF paths resolve to Binaries/aston, which the
+# Mu-Silicium "Binaries" submodule (= Project-Silicium/Device-Binaries pinned commit
+# a1501e0c2e642d6ac0d8f52c85af2a67b75a7799) already provides.  The infiniti -> Binaries/songyuan
+# copy is kept from the working recipe for parity and is not referenced by this package.
+
+on:
+  workflow_dispatch:
+
+env:
+  MU_SHA: 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+  FD_BASE: '0xA7100000'
+  FD_SIZE: '0x300000'
+  PAYLOAD_BASE: '0xF0000000'
+  PAYLOAD_CAP: '0x3700000'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
+
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
+          command -v lld-link || sudo ln -sf /usr/bin/ld.lld /usr/local/bin/lld-link
+
+      - name: clone the hackios helpers
+        run: |
+          git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
+          echo "hk at $(git -C hk rev-parse --short HEAD)"
+
+      - name: clone Mu-Silicium at the pinned commit
+        run: |
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          cd Mu-Silicium
+          git fetch --depth 1 origin "$MU_SHA"
+          git checkout -q "$MU_SHA"
+          git submodule update --init --recursive --depth 1
+          echo "mu at $(git rev-parse --short HEAD)"
+          test "$(git rev-parse HEAD)" = "$MU_SHA"
+
+      - name: overlay Mu-Silicium resources from the working recipe
+        run: |
+          mkdir -p Mu-Silicium/Resources/DTBs
+          mkdir -p Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib
+          # strict payload-container BootShim + the diagnostic green paint (working recipe)
+          cp hk/uefi/songyuan3/files/BootShim/BootShim.S Mu-Silicium/BootShim/BootShim.S
+          # base DTB that is appended to the boot image kernel field
+          cp hk/uefi/songyuan3/files/Resources/DTBs/songyuan.dtb Mu-Silicium/Resources/DTBs/songyuan.dtb
+          # XnuLoader is hooked into BootManagerLib by the patch step below
+          cp hk/uefi/songyuan3/files/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c \
+             Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c
+          cp hk/uefi/songyuan3/files/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.h \
+             Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.h
+          echo "25e11235cd6be71cd2774d81fc7dc2517c67cfe87862d99f794d969d4b022348  Mu-Silicium/Resources/DTBs/songyuan.dtb" | sha256sum -c -
+          ls -l Mu-Silicium/Resources/DTBs/songyuan.dtb Mu-Silicium/BootShim/BootShim.S
+
+      - name: vendor binaries (infiniti = OnePlus 15, SM8850; same as the working recipe)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set infiniti && cd ..
+          cp -r devbin/infiniti Mu-Silicium/Binaries/songyuan
+          ls Mu-Silicium/Binaries/songyuan | head
+          ls Mu-Silicium/Binaries/aston | head
+
+      - name: overlay the DT-aligned songyuan platform package
+        run: |
+          git clone --depth 1 https://github.com/aogg2023/songyuan-uefi.git songyuan-uefi
+          echo "songyuan-uefi at $(git -C songyuan-uefi rev-parse --short HEAD)"
+          mkdir -p Mu-Silicium/Platforms/Xiaomi
+          cp -r songyuan-uefi/Platforms/Xiaomi/songyuanPkg Mu-Silicium/Platforms/Xiaomi/songyuanPkg
+          cp songyuan-uefi/Resources/Configs/songyuan.toml Mu-Silicium/Resources/Configs/songyuan.toml
+          echo "0242e0af5a7d14ee7647234a5c583ed4ce317a6b3d122b2265d45a0a49ae1a3b  Mu-Silicium/Platforms/Xiaomi/songyuanPkg/Library/MemoryMapLib/MemoryMapLib.c" | sha256sum -c -
+          grep -q '^base = 0xA7100000' Mu-Silicium/Resources/Configs/songyuan.toml
+          grep -q '^size = 0x300000' Mu-Silicium/Resources/Configs/songyuan.toml
+          grep -q '^header_version = 0' Mu-Silicium/Resources/Configs/songyuan.toml
+          grep -n 'FD_Reserved\|UEFI_FD\|XNU_Payload' Mu-Silicium/Platforms/Xiaomi/songyuanPkg/Library/MemoryMapLib/MemoryMapLib.c
+          # the package must be the only songyuanPkg the build can pick (build_uefi.py globs */songyuanPkg)
+          test "$(find Mu-Silicium/Platforms -maxdepth 2 -type d -name songyuanPkg | wc -l)" = "1"
+          find Mu-Silicium/Platforms -maxdepth 2 -type d -name songyuanPkg
+
+      - name: hook the XNU loader into BootManager
+        run: |
+          python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf
+          grep -c XnuLoaderMain Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+
+      - name: build the loader
+        env:
+          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
+        run: |
+          cd hk/xnuloader
+          export BUILD_ID=$(git -C .. rev-parse HEAD)
+          bash build.sh
+          ls -l loader-phone.efi
+
+      - name: build the shim (strict, FD at 0xA7100000)
+        run: |
+          cd Mu-Silicium/BootShim
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=0xF0000000 -DPAYLOAD_CAP=0x3700000"
+          ls -l BootShim.bin
+          # the strict build is ~400 bytes; a sub-300-byte shim means PAYLOAD_BASE/PAYLOAD_CAP were not compiled in
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: pack the payload
+        run: |
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+          ls -l payload.bin
+
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d songyuan -r RELEASE
+          ls -l Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
+
+      - name: rebuild the strict shim after build_uefi.py
+        run: |
+          # build_uefi.py's cleanup_old_build() deletes BootShim.elf/BootShim.bin and re-runs
+          # `make REQUIRES_KERNEL_HEADER=1 FD_BASE=... FD_SIZE=...` without the PAYLOAD_* defines,
+          # which would otherwise leave a shim that ignores the payload container. Rebuild it here.
+          cd Mu-Silicium/BootShim
+          rm -f BootShim.bin BootShim.elf
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=0xA7100000 FD_SIZE=0x300000 \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=0xF0000000 -DPAYLOAD_CAP=0x3700000"
+          ls -l BootShim.bin
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: pack the v0 boot image
+        run: |
+          python3 - <<'EOF'
+          import gzip, hashlib, struct
+
+          fd_size = 0x300000
+          fd_path = 'Mu-Silicium/Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd'
+          fd = open(fd_path, 'rb').read()
+          print('FD', len(fd), 'expected', fd_size, 'sha256', hashlib.sha256(fd).hexdigest())
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          elif len(fd) > fd_size:
+              raise SystemExit('FD larger than the configured size')
+
+          shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
+          payload = open('payload.bin', 'rb').read()
+          payload += b'\0' * (-len(payload) % 16)
+          blob = shim + fd + payload
+          dtb = open('Mu-Silicium/Resources/DTBs/songyuan.dtb', 'rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          print('shim', len(shim), 'payload', len(payload), 'blob', len(blob), 'dtb', len(dtb),
+                'kernel field', len(kernelfield))
+
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))   # kernel_size
+          struct.pack_into('<I', hdr, 12, 0x8000)           # kernel_addr
+          struct.pack_into('<I', hdr, 16, 0)                # ramdisk_size
+          struct.pack_into('<I', hdr, 20, 0)                # ramdisk_addr
+          struct.pack_into('<I', hdr, 24, 0)                # second_size
+          struct.pack_into('<I', hdr, 28, 0)                # second_addr
+          struct.pack_into('<I', hdr, 32, 0x1e00000)        # tags_addr
+          struct.pack_into('<I', hdr, 36, PAGE)             # page_size
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-songyuan-v0.img', 'wb').write(img)
+          print('image', len(img))
+
+          # read the image back: v0 header fields, gzip magic at the kernel offset, DTB tail
+          data = open('out-songyuan-v0.img', 'rb').read()
+          ksize = struct.unpack_from('<I', data, 8)[0]
+          kaddr = struct.unpack_from('<I', data, 12)[0]
+          tags = struct.unpack_from('<I', data, 32)[0]
+          psz = struct.unpack_from('<I', data, 36)[0]
+          print('v0 header: magic', data[0:8], 'kernel_size', ksize, 'kernel_addr', hex(kaddr),
+                'tags_addr', hex(tags), 'page_size', psz)
+          assert data[0:8] == b'ANDROID!', 'bad magic'
+          assert psz == PAGE
+          assert data[PAGE:PAGE+2] == b'\x1f\x8b', 'kernel field is not gzip'
+          assert data[PAGE+ksize-4:PAGE+ksize] == dtb[-4:], 'DTB not appended at the end of the kernel field'
+          print('image self-check: OK, sha256', hashlib.sha256(data).hexdigest())
+          EOF
+
+      - name: stage artifacts and checksums
+        run: |
+          mkdir -p dist
+          cp Mu-Silicium/Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd dist/SILICIUM_UEFI.fd
+          cp out-songyuan-v0.img dist/out-songyuan-v0.img
+          cp Mu-Silicium/BootShim/BootShim.bin dist/BootShim.bin
+          cp payload.bin dist/payload.bin
+          cp hk/xnuloader/loader-phone.efi dist/loader-phone.efi
+          cd dist
+          sha256sum SILICIUM_UEFI.fd out-songyuan-v0.img BootShim.bin payload.bin loader-phone.efi > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: songyuan-uefi-dt
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

@@ -225,6 +225,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: songyuan-owndrv2
-          path: out-songyuan-owndrv.img
+          path: out-songyuan-owndrv2.img
           if-no-files-found: error
+
 

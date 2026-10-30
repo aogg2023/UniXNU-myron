@@ -58,14 +58,15 @@ jobs:
           ls -l Build/infinitiPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd 2>/dev/null || \
           ls -l Build/*/RELEASE_CLANGPDB/FV/*.fd
 
-      - name: rebuild the strict shim after build_uefi.py
+      - name: rebuild the stock shim after build_uefi.py
+        # The pinned upstream BootShim.S has no payload contract (that is the hk overlay); this
+        # control image therefore carries the FD only. The step exists because build_uefi.py
+        # deletes BootShim.bin/elf after the build.
         run: |
           cd Mu-Silicium/BootShim
           rm -f BootShim.bin BootShim.elf
-          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
-            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE
           ls -l BootShim.bin
-          test "$(stat -c%s BootShim.bin)" -gt 300
 
       - name: pack the v0 boot image
         run: |
@@ -101,3 +102,4 @@ jobs:
           name: infiniti-control
           path: out-infiniti-control.img
           if-no-files-found: error
+

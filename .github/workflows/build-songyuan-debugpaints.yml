@@ -63,34 +63,40 @@ jobs:
             Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf
           grep -c XnuLoaderMain Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
 
-      - name: inject the checkpoint bands
+      - name: inject the checkpoint stripes and the DXE progress bar
         run: |
           python3 - <<'EOF'
-          import re
+          STRIPE = (
+              '  {\n'
+              '    UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    for (MyY = 0; MyY < 2600; MyY++) { for (MyX = 0; MyX < 80; MyX++) { MyFb[MyY * 1200 + %d + MyX] = %s; } }\n'
+              '  }\n'
+          )
+          BAR = (
+              '  {\n'
+              '    static UINTN MyBar = 0; UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    if (MyBar < 58) {\n'
+              '      for (MyY = 200; MyY < 232; MyY++) { for (MyX = 0; MyX < 18; MyX++) { MyFb[MyY * 1200 + MyBar * 20 + MyX] = 0xFFFFFF00u; } }\n'
+              '      MyBar++;\n'
+              '    }\n'
+              '  }\n'
+          )
 
-          def band(index, colour):
-              return (
-                  '  {\n'
-                  '    UINTN PaintI; volatile UINT32 *PaintP = (volatile UINT32 *)(UINTN)(0xFC800000ULL + %dULL * 0x200000ULL);\n'
-                  '    for (PaintI = 0; PaintI < 0x40000; PaintI++) { PaintP[PaintI] = %s; }\n'
-                  '  }\n' % (index, colour)
-              )
-
-          def patch(path, signature, index, colour):
+          def patch(path, signature, text):
               s = open(path, encoding='utf-8').read()
               i = s.index(signature)
               j = s.index('\n{\n', i)
-              out = s[:j + 3] + band(index, colour) + s[j + 3:]
-              open(path, 'w', encoding='utf-8').write(out)
-              print('patched', path, 'band', index)
+              open(path, 'w', encoding='utf-8').write(s[:j + 3] + text + s[j + 3:])
+              print('patched', path)
 
-          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', 0, '0xFFFF0000u')
-          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', 1, '0xFFFFFF00u')
-          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', 2, '0xFF00FF00u')
-          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', 3, '0xFF0000FFu')
-          patch('Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c', 'XnuLoaderMain ()', 4, '0xFF00FFFFu')
+          base = 'Mu-Silicium/Mu_Basecore/'
+          patch(base + 'MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', STRIPE % (0, '0xFFFF0000u'))
+          patch(base + 'MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', STRIPE % (100, '0xFFFFFF00u'))
+          patch(base + 'MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', STRIPE % (200, '0xFF00FF00u'))
+          patch(base + 'MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', STRIPE % (300, '0xFF0000FFu'))
+          patch('Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c', 'XnuLoaderMain ()', STRIPE % (400, '0xFF00FFFFu'))
+          patch(base + 'MdeModulePkg/Core/Dxe/Image/Image.c', 'CoreStartImage (', BAR)
           EOF
-
       - name: build the loader
         env:
           EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
@@ -164,5 +170,6 @@ jobs:
           name: songyuan-paints
           path: out-songyuan-paints.img
           if-no-files-found: error
+
 
 

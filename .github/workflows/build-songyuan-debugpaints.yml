@@ -56,6 +56,31 @@ jobs:
           test -f Mu-Silicium/Resources/Configs/songyuan.toml
           grep -q '^base = 0xC6900000' Mu-Silicium/Resources/Configs/songyuan.toml
 
+      - name: drop the bus, charger and USB pollers from the DXE set
+        # The progress bar showed ~30 DXE images started and then a hang; that lands on the
+        # I2C/I3C/SPI bus enumerators in DXE.inc. This build keeps the platform core, power,
+        # clocks, storage and display and drops the drivers that poll hardware which may not
+        # answer on songyuan. One boot tells whether BDS is then reached.
+        run: |
+          python3 - <<'EOF'
+          drop = ('QupDxe', 'GpiDxe', 'I2CDxe', 'I3CMasterDxe', 'SPIDxe', 'SdccDxe', 'ButtonsDxe',
+                  'ChargerExDxe', 'OcdtDxe', 'TLMMExDxe', 'IPCCDxe', 'PmicGlinkSoccpDxe',
+                  'QcomChargerDxe', 'UsbPwrCtrlDxe', 'XhciDxe', 'XhciPciEmulationDxe',
+                  'UsbfnDwc3Dxe', 'OplusExGpio', 'FeatureEnablerDxe', 'TsensDxe',
+                  'OGaugeAuthDxe', 'LimitsDxe', 'PsStateDxe', 'ULogDxe', 'UsbConfigDxe',
+                  'UsbDeviceDxe', 'UsbInitDxe', 'UsbMsdDxe', 'UsbBusDxe')
+          path = 'Mu-Silicium/Platforms/OnePlus/songyuanPkg/Include/DXE.inc'
+          lines = open(path, encoding='utf-8').read().split('\n')
+          out = []
+          for line in lines:
+              if line.strip().startswith('INF ') and any(d in line for d in drop):
+                  out.append('# ' + line)
+              else:
+                  out.append(line)
+          open(path, 'w', encoding='utf-8').write('\n'.join(out))
+          kept = [l for l in out if l.strip().startswith('INF ')]
+          print('DXE.inc kept', len(kept))
+          EOF
       - name: hook the XNU loader into BootManager
         run: |
           python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
@@ -170,6 +195,7 @@ jobs:
           name: songyuan-paints
           path: out-songyuan-paints.img
           if-no-files-found: error
+
 
 
 

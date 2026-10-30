@@ -1,0 +1,155 @@
+name: build-myron-firmware
+# Build myron's own Mu-Silicium package verbatim (no songyuan overlay) and boot-test it on songyuan.
+# myron and songyuan are two SKUs of one board; if this firmware reaches its boot manager, the fault
+# is in our own songyuan platform package rather than in Mu-Silicium or the SoC support.
+# Checkpoint stripes and the DXE progress bar stay in, so a hang is still localised in one boot.
+on:
+  workflow_dispatch:
+
+env:
+  FD_BASE: '0xA7100000'
+  FD_SIZE: '0x300000'
+  PAYLOAD_BASE: '0xF0000000'
+  PAYLOAD_CAP: '0x3700000'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
+          command -v lld-link || sudo ln -sf /usr/bin/lld.lld /usr/local/bin/lld-link
+
+      - name: clone the hackios helpers (strict payload shim and phone loader)
+        run: |
+          git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
+
+      - name: clone Mu-Silicium
+        run: |
+          git clone --recursive --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          echo "mu at $(git -C Mu-Silicium rev-parse --short HEAD)"
+
+      - name: vendor binaries (aston, as myronPkg references them)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set aston && cd ..
+          cp -r devbin/aston Mu-Silicium/Binaries/aston
+          ls Mu-Silicium/Binaries/aston | head
+
+      - name: overlay myron's own package verbatim
+        run: |
+          git clone --depth 1 https://github.com/Typeun/myron-uefi.git myron-uefi
+          cp -r myron-uefi/Platforms/Xiaomi/myronPkg Mu-Silicium/Platforms/Xiaomi/myronPkg
+          cp myron-uefi/Resources/Configs/myron.toml Mu-Silicium/Resources/Configs/myron.toml
+          cp myron-uefi/Resources/DTBs/myron.dtb Mu-Silicium/Resources/DTBs/myron.dtb
+          test -f Mu-Silicium/Platforms/Xiaomi/myronPkg/myron.dsc
+          test -f Mu-Silicium/Platforms/Xiaomi/myronPkg/myron.fdf
+          grep -q '^base = 0xA7100000' Mu-Silicium/Resources/Configs/myron.toml
+          ls Mu-Silicium/Platforms/Xiaomi/myronPkg
+
+      - name: inject the checkpoint stripes and the DXE progress bar
+        run: |
+          python3 - <<'EOF'
+          STRIPE = (
+              '  {\n'
+              '    UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    for (MyY = 0; MyY < 2600; MyY++) { for (MyX = 0; MyX < 80; MyX++) { MyFb[MyY * 1200 + %d + MyX] = %s; } }\n'
+              '  }\n'
+          )
+          BAR = (
+              '  {\n'
+              '    static UINTN MyBar = 0; UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    if (MyBar < 58) {\n'
+              '      for (MyY = 200; MyY < 232; MyY++) { for (MyX = 0; MyX < 18; MyX++) { MyFb[MyY * 1200 + MyBar * 20 + MyX] = 0xFFFFFF00u; } }\n'
+              '      MyBar++;\n'
+              '    }\n'
+              '  }\n'
+          )
+          def patch(path, signature, text):
+              s = open(path, encoding='utf-8').read()
+              i = s.index(signature)
+              j = s.index('\n{\n', i)
+              open(path, 'w', encoding='utf-8').write(s[:j + 3] + text + s[j + 3:])
+              print('patched', path)
+          b = 'Mu-Silicium/Mu_Basecore/'
+          patch(b + 'MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', STRIPE % (0, '0xFFFF0000u'))
+          patch(b + 'MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', STRIPE % (100, '0xFFFFFF00u'))
+          patch(b + 'MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', STRIPE % (200, '0xFF00FF00u'))
+          patch(b + 'MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', STRIPE % (300, '0xFF0000FFu'))
+          patch(b + 'MdeModulePkg/Core/Dxe/Image/Image.c', 'CoreStartImage (', BAR)
+          EOF
+
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d myron -r RELEASE
+          ls -l Build/myronPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
+          sha256sum Build/myronPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
+
+      - name: rebuild the strict shim after build_uefi.py
+        run: |
+          cd Mu-Silicium/BootShim
+          rm -f BootShim.bin BootShim.elf
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          ls -l BootShim.bin
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: build the phone loader and pack the payload
+        env:
+          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
+        run: |
+          cd hk/xnuloader
+          export BUILD_ID=$(git -C .. rev-parse HEAD)
+          bash build.sh
+          cd ../..
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+          ls -l payload.bin
+
+      - name: pack the v0 boot image
+        run: |
+          python3 - <<'EOF'
+          import gzip, hashlib, struct
+          fd_size = 0x300000
+          fd = open('Mu-Silicium/Build/myronPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd', 'rb').read()
+          print('FD', len(fd), 'sha256', hashlib.sha256(fd).hexdigest())
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
+          payload = open('payload.bin', 'rb').read()
+          payload += b'\0' * (-len(payload) % 16)
+          blob = shim + fd + payload
+          dtb = open('Mu-Silicium/Resources/DTBs/myron.dtb', 'rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))
+          struct.pack_into('<I', hdr, 12, 0x8000)
+          struct.pack_into('<I', hdr, 32, 0x1e00000)
+          struct.pack_into('<I', hdr, 36, PAGE)
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-myron-firmware.img', 'wb').write(img)
+          print('shim', len(shim), 'payload', len(payload), 'image', len(img),
+                'sha256', hashlib.sha256(img).hexdigest())
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myron-firmware
+          path: out-myron-firmware.img
+          if-no-files-found: error

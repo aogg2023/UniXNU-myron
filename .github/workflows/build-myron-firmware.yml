@@ -130,7 +130,7 @@ jobs:
           pad = lambda b: b + b'\0' * (-len(b) % PAGE)
           img = pad(bytes(hdr)) + pad(kernelfield)
           open('out-myron-firmware.img', 'wb').write(img)
-          print('shim', len(shim), 'payload', len(payload), 'image', len(img),
+          print('shim', len(shim), 'fd', len(fd), 'image', len(img),
                 'sha256', hashlib.sha256(img).hexdigest())
           EOF
 
@@ -139,4 +139,5 @@ jobs:
           name: myron-firmware
           path: out-myron-firmware.img
           if-no-files-found: error
+
 

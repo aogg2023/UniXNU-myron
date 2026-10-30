@@ -1,0 +1,103 @@
+name: songyuan-infiniti-control
+# Control experiment: upstream Mu-Silicium infinitiPkg, pinned commit, no songyuan overlay.
+# Purpose: find out whether the SM8850 OnePlus 15 (infiniti) firmware reaches its boot manager on
+# songyuan at all. Only the strict-payload BootShim and the v0 image packing are added.
+on:
+  workflow_dispatch:
+
+env:
+  MU_SHA: 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+  FD_BASE: '0xC6900000'
+  FD_SIZE: '0x300000'
+  PAYLOAD_BASE: '0xF0000000'
+  PAYLOAD_CAP: '0x3700000'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
+          command -v lld-link || sudo ln -sf /usr/bin/lld.lld /usr/local/bin/lld-link
+
+      - name: clone Mu-Silicium at the pinned commit
+        run: |
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          cd Mu-Silicium
+          git fetch --depth 1 origin "$MU_SHA"
+          git checkout -q "$MU_SHA"
+          git submodule update --init --recursive --depth 1
+          test "$(git rev-parse HEAD)" = "$MU_SHA"
+          grep -n 'base' Resources/Configs/infiniti.toml | head
+          ls -l Resources/DTBs/infiniti.dtb
+
+      - name: vendor binaries (infiniti)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set infiniti && cd ..
+          cp -r devbin/infiniti Mu-Silicium/Binaries/infiniti
+          ls Mu-Silicium/Binaries/infiniti | head
+
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d infiniti -r RELEASE
+          ls -l Build/infinitiPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd 2>/dev/null || \
+          ls -l Build/*/RELEASE_CLANGPDB/FV/*.fd
+
+      - name: rebuild the strict shim after build_uefi.py
+        run: |
+          cd Mu-Silicium/BootShim
+          rm -f BootShim.bin BootShim.elf
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          ls -l BootShim.bin
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: pack the v0 boot image
+        run: |
+          python3 - "$FD_BASE" <<'EOF'
+          import gzip, glob, struct, sys
+          fd_size = 0x300000
+          path = glob.glob('Mu-Silicium/Build/*/RELEASE_CLANGPDB/FV/*.fd')[0]
+          fd = open(path, 'rb').read()
+          print('FD', path, len(fd))
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          elif len(fd) > fd_size:
+              raise SystemExit('FD larger than the configured size')
+          shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
+          blob = shim + fd
+          dtb = open('Mu-Silicium/Resources/DTBs/infiniti.dtb', 'rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))
+          struct.pack_into('<I', hdr, 12, 0x8000)
+          struct.pack_into('<I', hdr, 32, 0x1e00000)
+          struct.pack_into('<I', hdr, 36, PAGE)
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-infiniti-control.img', 'wb').write(img)
+          print('shim', len(shim), 'fd', len(fd), 'dtb', len(dtb), 'image', len(img))
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infiniti-control
+          path: out-infiniti-control.img
+          if-no-files-found: error

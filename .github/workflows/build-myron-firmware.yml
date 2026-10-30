@@ -99,26 +99,14 @@ jobs:
           ls -l Build/myronPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
           sha256sum Build/myronPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
 
-      - name: rebuild the strict shim after build_uefi.py
+      - name: rebuild the stock shim after build_uefi.py
+        # myron's payload travels in the boot image ramdisk (UniXNU FAT volume), not in a shim
+        # container, so the stock Mu-Silicium shim is the right one here.
         run: |
           cd Mu-Silicium/BootShim
           rm -f BootShim.bin BootShim.elf
-          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
-            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE
           ls -l BootShim.bin
-          test "$(stat -c%s BootShim.bin)" -gt 300
-
-      - name: build the phone loader and pack the payload
-        env:
-          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
-        run: |
-          cd hk/xnuloader
-          export BUILD_ID=$(git -C .. rev-parse HEAD)
-          bash build.sh
-          cd ../..
-          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
-          ls -l payload.bin
-
       - name: pack the v0 boot image
         run: |
           python3 - <<'EOF'
@@ -129,9 +117,7 @@ jobs:
           if len(fd) < fd_size:
               fd += b'\0' * (fd_size - len(fd))
           shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
-          payload = open('payload.bin', 'rb').read()
-          payload += b'\0' * (-len(payload) % 16)
-          blob = shim + fd + payload
+          blob = shim + fd
           dtb = open('Mu-Silicium/Resources/DTBs/myron.dtb', 'rb').read()
           kernelfield = gzip.compress(blob, 6) + dtb
           PAGE = 4096
@@ -153,3 +139,4 @@ jobs:
           name: myron-firmware
           path: out-myron-firmware.img
           if-no-files-found: error
+

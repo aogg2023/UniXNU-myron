@@ -84,10 +84,10 @@ jobs:
               open(path, 'w', encoding='utf-8').write(out)
               print('patched', path, 'band', index)
 
-          patch('Mu-Silicium/MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', 0, '0xFFFF0000u')
-          patch('Mu-Silicium/MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', 1, '0xFFFFFF00u')
-          patch('Mu-Silicium/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', 2, '0xFF00FF00u')
-          patch('Mu-Silicium/MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', 3, '0xFF0000FFu')
+          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', 0, '0xFFFF0000u')
+          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', 1, '0xFFFFFF00u')
+          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', 2, '0xFF00FF00u')
+          patch('Mu-Silicium/Mu_Basecore/MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', 3, '0xFF0000FFu')
           patch('Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c', 'XnuLoaderMain ()', 4, '0xFF00FFFFu')
           EOF
 
@@ -164,4 +164,5 @@ jobs:
           name: songyuan-paints
           path: out-songyuan-paints.img
           if-no-files-found: error
+
 

@@ -1,0 +1,202 @@
+name: songyuan-fd680
+# One boot, many checkpoints: paint a coloured band at each firmware stage so the screen alone
+# shows how far the FD got. Built from the songyuan3 (infiniti base) recipe with the strict
+# payload shim restored after build_uefi.py (the songyuan3 workflow loses PAYLOAD_* there).
+#
+#   band 0  red      PeiCore entry
+#   band 1  yellow   PeiDispatcher entry
+#   band 2  green    DxeMain entry
+#   band 3  blue     BdsEntry entry
+#   band 4  cyan     XnuLoaderMain entry
+# Bands sit at 0xFC800000 + i * 0x200000, 1 MiB each, inside the ~12.5 MiB visible frame buffer.
+on:
+  workflow_dispatch:
+
+env:
+  MU_SHA: 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+  FD_BASE: '0xC6800000'
+  FD_SIZE: '0x300000'
+  PAYLOAD_BASE: '0xF0000000'
+  PAYLOAD_CAP: '0x3700000'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev
+          command -v lld-link || sudo ln -sf /usr/bin/lld.lld /usr/local/bin/lld-link
+
+      - name: clone the hackios helpers
+        run: |
+          git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
+          echo "hk at $(git -C hk rev-parse --short HEAD)"
+
+      - name: clone Mu-Silicium at the pinned commit
+        run: |
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          cd Mu-Silicium
+          git fetch --depth 1 origin "$MU_SHA"
+          git checkout -q "$MU_SHA"
+          git submodule update --init --recursive --depth 1
+          test "$(git rev-parse HEAD)" = "$MU_SHA"
+
+      - name: vendor binaries (infiniti = OnePlus 15, SM8850)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set infiniti && cd ..
+          cp -r devbin/infiniti Mu-Silicium/Binaries/songyuan
+
+      - name: overlay the songyuan3 port
+        run: |
+          cp -r hk/uefi/songyuan3/files/. Mu-Silicium/
+          test -f Mu-Silicium/Resources/Configs/songyuan.toml
+          grep -q '^base = 0xC6900000' Mu-Silicium/Resources/Configs/songyuan.toml
+
+      - name: drop the bus, charger and USB pollers from the DXE set
+        # The progress bar showed ~30 DXE images started and then a hang; that lands on the
+        # I2C/I3C/SPI bus enumerators in DXE.inc. This build keeps the platform core, power,
+        # clocks, storage and display and drops the drivers that poll hardware which may not
+        # answer on songyuan. One boot tells whether BDS is then reached.
+        run: |
+          python3 - <<'EOF'
+          drop = ('QupDxe', 'GpiDxe', 'I2CDxe', 'I3CMasterDxe', 'SPIDxe', 'SdccDxe', 'ButtonsDxe',
+                  'ChargerExDxe', 'OcdtDxe', 'TLMMExDxe', 'IPCCDxe', 'PmicGlinkSoccpDxe',
+                  'QcomChargerDxe', 'UsbPwrCtrlDxe', 'XhciDxe', 'XhciPciEmulationDxe',
+                  'UsbfnDwc3Dxe', 'OplusExGpio', 'FeatureEnablerDxe', 'TsensDxe',
+                  'OGaugeAuthDxe', 'LimitsDxe', 'PsStateDxe', 'ULogDxe', 'UsbConfigDxe',
+                  'UsbDeviceDxe', 'UsbInitDxe', 'UsbMsdDxe', 'UsbBusDxe')
+          path = 'Mu-Silicium/Platforms/OnePlus/songyuanPkg/Include/DXE.inc'
+          lines = open(path, encoding='utf-8').read().split('\n')
+          out = []
+          for line in lines:
+              if line.strip().startswith('INF ') and any(d in line for d in drop):
+                  out.append('# ' + line)
+              else:
+                  out.append(line)
+          open(path, 'w', encoding='utf-8').write('\n'.join(out))
+          kept = [l for l in out if l.strip().startswith('INF ')]
+          print('DXE.inc kept', len(kept))
+          EOF
+      - name: hook the XNU loader into BootManager
+        run: |
+          python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf
+          grep -c XnuLoaderMain Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+
+      - name: inject the checkpoint stripes and the DXE progress bar
+        run: |
+          python3 - <<'EOF'
+          STRIPE = (
+              '  {\n'
+              '    UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    for (MyY = 0; MyY < 2600; MyY++) { for (MyX = 0; MyX < 80; MyX++) { MyFb[MyY * 1200 + %d + MyX] = %s; } }\n'
+              '  }\n'
+          )
+          BAR = (
+              '  {\n'
+              '    static UINTN MyBar = 0; UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    if (MyBar < 58) {\n'
+              '      for (MyY = 200; MyY < 232; MyY++) { for (MyX = 0; MyX < 18; MyX++) { MyFb[MyY * 1200 + MyBar * 20 + MyX] = 0xFFFFFF00u; } }\n'
+              '      MyBar++;\n'
+              '    }\n'
+              '  }\n'
+          )
+
+          def patch(path, signature, text):
+              s = open(path, encoding='utf-8').read()
+              i = s.index(signature)
+              j = s.index('\n{\n', i)
+              open(path, 'w', encoding='utf-8').write(s[:j + 3] + text + s[j + 3:])
+              print('patched', path)
+
+          base = 'Mu-Silicium/Mu_Basecore/'
+          patch(base + 'MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', STRIPE % (0, '0xFFFF0000u'))
+          patch(base + 'MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', STRIPE % (100, '0xFFFFFF00u'))
+          patch(base + 'MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', STRIPE % (200, '0xFF00FF00u'))
+          patch(base + 'MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', STRIPE % (300, '0xFF0000FFu'))
+          patch('Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c', 'XnuLoaderMain ()', STRIPE % (400, '0xFF00FFFFu'))
+          patch(base + 'MdeModulePkg/Core/Dxe/Image/Image.c', 'CoreStartImage (', BAR)
+          EOF
+      - name: build the loader
+        env:
+          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
+        run: |
+          cd hk/xnuloader
+          export BUILD_ID=$(git -C .. rev-parse HEAD)
+          bash build.sh
+          ls -l loader-phone.efi
+
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d songyuan -r RELEASE
+          ls -l Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
+
+      - name: rebuild the strict shim after build_uefi.py
+        run: |
+          cd Mu-Silicium/BootShim
+          rm -f BootShim.bin BootShim.elf
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          ls -l BootShim.bin
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: pack the payload
+        run: |
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+          ls -l payload.bin
+
+      - name: pack the v0 boot image
+        run: |
+          python3 - <<'EOF'
+          import gzip, hashlib, struct
+          fd_size = 0x300000
+          fd = open('Mu-Silicium/Build/songyuanPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd', 'rb').read()
+          print('FD', len(fd), 'sha256', hashlib.sha256(fd).hexdigest())
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
+          payload = open('payload.bin', 'rb').read()
+          payload += b'\0' * (-len(payload) % 16)
+          blob = shim + fd + payload
+          dtb = open('Mu-Silicium/Resources/DTBs/songyuan.dtb', 'rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))
+          struct.pack_into('<I', hdr, 12, 0x8000)
+          struct.pack_into('<I', hdr, 32, 0x1e00000)
+          struct.pack_into('<I', hdr, 36, PAGE)
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-songyuan-paints.img', 'wb').write(img)
+          print('shim', len(shim), 'payload', len(payload), 'image', len(img),
+                'sha256', hashlib.sha256(img).hexdigest())
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: songyuan-paints
+          path: out-songyuan-paints.img
+          if-no-files-found: error
+
+
+
+
+

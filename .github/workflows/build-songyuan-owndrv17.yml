@@ -1,0 +1,279 @@
+name: songyuan-owndrv17
+# Same songyuan3 recipe that already reaches DXE, but every vendor DXE binary is replaced by the
+# one extracted from THIS phone's uefi_a partition (GUID matched against the .inf skeleton), the
+# way Reixo0/mu-silicium-nx809j boots its SM8850 board. FD stays at 0xC6900000 (board map), v0 image,
+# strict payload shim and the checkpoint stripes/progress bar are kept.
+on:
+  workflow_dispatch:
+
+env:
+  FD_BASE: '0xC6900000'
+  FD_SIZE: '0x300000'
+  PAYLOAD_BASE: '0xF0000000'
+  PAYLOAD_CAP: '0x3700000'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential uuid-dev nasm acpica-tools python3 python3-venv python3-pip clang lld llvm gcc-aarch64-linux-gnu libfuse3-dev xz-utils
+          command -v lld-link || sudo ln -sf /usr/bin/lld.lld /usr/local/bin/lld-link
+
+      - name: clone the hackios helpers and Mu-Silicium
+        run: |
+          git clone --depth 1 -b k90-port https://github.com/aogg2023/hackios-xnu-kernel.git hk
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git
+          cd Mu-Silicium
+          git fetch --depth 1 origin 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+          git checkout -q 4cba43c90e02cdbefbcd9fcdbda33d2328deaec0
+          git submodule update --init --recursive --depth 1
+
+      - name: vendor .inf skeleton (infiniti; binaries are replaced below)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Project-Silicium/Device-Binaries.git devbin
+          cd devbin && git sparse-checkout set infiniti && cd ..
+          cp -r devbin/infiniti Mu-Silicium/Binaries/songyuan
+          find Mu-Silicium/Binaries/songyuan -name '*.inf' | wc -l
+
+      - name: our own drivers from the phone's uefi_a (private repo)
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.SONGYUAN_FW_TOKEN }}@github.com/aogg2023/songyuan-fw.git fw
+          mkdir -p fw/fv
+          tar -xJf fw/songyuan-fv.tar.xz -C fw/fv
+          ls fw/fv | wc -l
+
+      - name: replace the vendor binaries by GUID
+        run: |
+          python3 - <<'EOF'
+          import os, re, shutil
+          skeleton = 'Mu-Silicium/Binaries/songyuan'
+          fv = 'fw/fv'
+          by_guid = {}
+          for name in os.listdir(fv):
+              d = os.path.join(fv, name)
+              if not os.path.isdir(d):
+                  continue
+              for f in os.listdir(d):
+                  if f.endswith('.guid'):
+                      g = open(os.path.join(d, f), encoding='utf-8', errors='replace').read().split()[0].upper()
+                      by_guid.setdefault(g, d)
+          matched = missing = 0
+          missing_names = []
+          for root, dirs, files in os.walk(skeleton):
+              for fn in files:
+                  if not fn.endswith('.inf'):
+                      continue
+                  p = os.path.join(root, fn)
+                  txt = open(p, encoding='utf-8', errors='replace').read()
+                  m = re.search(r'FILE_GUID\s*=\s*([0-9A-Fa-f-]{36})', txt)
+                  if not m:
+                      continue
+                  guid = m.group(1).upper()
+                  names = re.findall(r'PE32\|\s*([^|\r\n]+)', txt)
+                  src = by_guid.get(guid)
+                  if not src:
+                      missing += 1
+                      missing_names.append(fn)
+                      continue
+                  efis = [x for x in os.listdir(src) if x.endswith('.efi')]
+                  if not efis:
+                      missing += 1
+                      missing_names.append(fn)
+                      continue
+                  target = names[0].strip() if names else fn[:-4] + '.efi'
+                  shutil.copy(os.path.join(src, efis[0]), os.path.join(root, target))
+                  matched += 1
+          print('replaced', matched, 'drivers; missing', missing)
+          if missing_names:
+              print('missing:', ' '.join(missing_names[:20]))
+          if matched < 40:
+              raise SystemExit('too few drivers replaced')
+          EOF
+
+      - name: overlay the songyuan3 port
+        run: |
+          cp -r hk/uefi/songyuan3/files/. Mu-Silicium/
+          test -f Mu-Silicium/Resources/Configs/songyuan.toml
+          grep -q '^base = 0xC6900000' Mu-Silicium/Resources/Configs/songyuan.toml
+
+      - name: fix the frame buffer geometry in the package (our panel is 1200x2608)
+        # The songyuan package was renamed from OnePlus 15 (1272x2772) / Ace 5 (1264x2780) files and
+        # kept their PcdFrameBufferWidth/Height; the GOP and the DEBUG console then render with the
+        # wrong stride, which is why the debug text was unreadable. BOOT-CONTRACT B9: 1200x2608, stride 4800.
+        run: |
+          dsc=Mu-Silicium/Platforms/OnePlus/songyuanPkg/songyuan.dsc
+          sed -i 's/^\(  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|\).*/\11200/' "$dsc"
+          sed -i 's/^\(  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|\).*/\12608/' "$dsc"
+          grep -n 'PcdFrameBuffer' "$dsc"
+      - name: hook the XNU loader into BootManager
+        run: |
+          python3 hk/uefi/songyuan/patch_bootmanager_xnuloader.py \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c \
+            Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManagerLib.inf
+          grep -c XnuLoaderMain Mu-Silicium/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c
+
+      - name: drop the drivers that hang or do not exist on this board
+        run: |
+          python3 - <<'EOF'
+          drop = ('UsbPwrCtrlDxe','UsbfnDwc3Dxe','XhciPciEmulationDxe','XhciDxe','UsbBusDxe','UsbKbDxe','UsbMassStorageDxe','UsbMsdDxe','UsbDeviceDxe','UsbConfigDxe','UsbInitDxe')
+          path = 'Mu-Silicium/Platforms/OnePlus/songyuanPkg/Include/DXE.inc'
+          lines = open(path, encoding='utf-8').read().split('\n')
+          out = []
+          for line in lines:
+              if line.strip().startswith('INF ') and any(d in line for d in drop):
+                  out.append('# ' + line)
+              else:
+                  out.append(line)
+          open(path, 'w', encoding='utf-8').write('\n'.join(out))
+          kept = [l for l in out if l.strip().startswith('INF ')]
+          print('DXE.inc kept', len(kept))
+          EOF
+      - name: inject the checkpoint stripes and the DXE progress bar
+        run: |
+          python3 - <<'EOF'
+          STRIPE = (
+              '  {\n'
+              '    UINTN MyY, MyX; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    for (MyY = 0; MyY < 2600; MyY++) { for (MyX = 0; MyX < 80; MyX++) { MyFb[MyY * 1200 + %d + MyX] = %s; } }\n'
+              '  }\n'
+          )
+          BAR = (
+              '  {\n'
+              '    static UINTN MyBar = 0; UINTN MyY, MyX, MyI; volatile UINT32 *MyFb = (volatile UINT32 *)(UINTN)0xFC800000ULL;\n'
+              '    static const UINT32 MyCol[10] = {0xFFFFFF00u, 0xFF00FFFFu, 0xFFFF00FFu, 0xFFFF8000u, 0xFF00FF00u,\n'
+              '                                      0xFF0000FFu, 0xFFFFFFFFu, 0xFFFF0000u, 0xFF808080u, 0xFF0080FFu};\n'
+              '    if (MyBar < 96) {\n'
+              '      UINT32 MyC = MyCol[(MyBar / 10) % 10];\n'
+              '      for (MyY = 200; MyY < 236; MyY++) { for (MyX = 0; MyX < 10; MyX++) { MyFb[MyY * 1200 + MyBar * 12 + MyX] = MyC; } }\n'
+              '      for (MyI = 0; MyI < 8; MyI++) {\n'
+              '        UINT32 MyB = ((MyBar >> MyI) & 1u) ? 0xFFFFFFFFu : 0xFF000040u;\n'
+              '        for (MyY = 300; MyY < 380; MyY++) { for (MyX = 0; MyX < 40; MyX++) { MyFb[MyY * 1200 + 100 + MyI * 60 + MyX] = MyB; } }\n'
+              '      }\n'
+              '      MyBar++;\n'
+              '    }\n'
+              '  }\n'
+          )
+          def patch(path, signature, text):
+              s = open(path, encoding='utf-8').read()
+              i = s.index(signature)
+              j = s.index('\n{\n', i)
+              open(path, 'w', encoding='utf-8').write(s[:j + 3] + text + s[j + 3:])
+              print('patched', path)
+          b = 'Mu-Silicium/Mu_Basecore/'
+          patch(b + 'MdeModulePkg/Core/Pei/PeiMain/PeiMain.c', 'PeiCore (', STRIPE % (0, '0xFFFF0000u'))
+          patch(b + 'MdeModulePkg/Core/Pei/Dispatcher/Dispatcher.c', 'PeiDispatcher (', STRIPE % (100, '0xFFFFFF00u'))
+          patch(b + 'MdeModulePkg/Core/Dxe/DxeMain/DxeMain.c', 'DxeMain (', STRIPE % (200, '0xFF00FF00u'))
+          patch(b + 'MdeModulePkg/Universal/BdsDxe/BdsEntry.c', 'BdsEntry (', STRIPE % (300, '0xFF0000FFu'))
+          patch(b + 'MdeModulePkg/Core/Dxe/Image/Image.c', 'CoreStartImage (', BAR)
+          EOF
+
+      - name: add a magenta marker to the phone loader
+        # loader.efi paints a magenta block at y=1200 first, proving XnuLoaderMain started the payload
+        # (BDS passed and the unable-to-boot path ran).
+        run: |
+          python3 - <<'EOF'
+          path = 'hk/xnuloader/loader_06_usb_entry.inc'
+          s = open(path, encoding='utf-8').read()
+          sig = 'efi_main(efi_handle image, efi_system_table *st)'
+          i = s.index(sig)
+          j = s.index('{', i) + 1
+          mark = ('\n  { volatile unsigned int *MyP = (volatile unsigned int *)(0xFC800000UL + 1200UL * 1200UL * 4UL);'
+                  ' unsigned int MyI; for (MyI = 0; MyI < 240000U; MyI++) MyP[MyI] = 0xFFFF00FFu; }\n')
+          open(path, 'w', encoding='utf-8').write(s[:j] + mark + s[j:])
+          print('loader marker inserted')
+          EOF
+      - name: patch the TzDxeLA QseeCom assert (line 246) out of the binary
+        run: |
+          python3 - <<'PYEOF'
+          import glob, hashlib
+          want = 'a075b6fb1699268818a9793fed628baa924d1c17cdfa9a66b0a249dc172e289f'
+          for p in glob.glob('Mu-Silicium/Binaries/songyuan/**/*.efi', recursive=True):
+              d = open(p, 'rb').read()
+              if hashlib.sha256(d).hexdigest() != want:
+                  continue
+              assert d[0x3380:0x3384] == b'\x40\x00\x00\x90', d[0x3380:0x3384].hex()
+              b = bytearray(d)
+              b[0x3380:0x3384] = bytes.fromhex('dbffff17')   # b 0x32ec
+              for off in range(0x3384, 0x3398, 4):
+                  b[off:off+4] = bytes.fromhex('1f2003d5')   # nop
+              open(p, 'wb').write(bytes(b))
+              print('patched', p, hashlib.sha256(bytes(b)).hexdigest())
+          PYEOF
+
+      - name: build the loader and the payload
+        env:
+          EXTRA_CFLAGS: '-DDIRECT_PHONE_PLAT -DPHONE_PLATFORM=platform_songyuan -DPHONE_FB_WIDTH=1200 -DPHONE_FB_HEIGHT=2608'
+        run: |
+          cd hk/xnuloader
+          export BUILD_ID=$(git -C .. rev-parse HEAD)
+          bash build.sh
+          cd ../..
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+
+      - name: nasm shim and venv
+        run: |
+          D=Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep
+          mkdir -p $D/Linux-x86-64
+          echo 'version: 20016.1.1' > $D/extdep_state.yaml
+          ln -sf /usr/bin/nasm /usr/bin/ndisasm $D/Linux-x86-64/ 2>/dev/null || true
+          python3 -m venv venv
+          venv/bin/pip install -r Mu-Silicium/pip-requirements.txt
+
+      - name: build uefi
+        run: |
+          cd Mu-Silicium
+          source ../venv/bin/activate
+          python3 build_uefi.py -d songyuan -r DEBUG
+          ls -l Build/songyuanPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd
+
+      - name: rebuild the strict shim after build_uefi.py
+        run: |
+          cd Mu-Silicium/BootShim
+          rm -f BootShim.bin BootShim.elf
+          make -B REQUIRES_KERNEL_HEADER=1 FD_BASE=$FD_BASE FD_SIZE=$FD_SIZE \
+            CFLAGS="--target=aarch64-linux-gnu -DPAYLOAD_BASE=$PAYLOAD_BASE -DPAYLOAD_CAP=$PAYLOAD_CAP"
+          test "$(stat -c%s BootShim.bin)" -gt 300
+
+      - name: pack the v0 boot image
+        run: |
+          python3 - <<'EOF'
+          import gzip, hashlib, struct
+          fd_size = 0x300000
+          fd = open('Mu-Silicium/Build/songyuanPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd', 'rb').read()
+          print('FD', len(fd), 'sha256', hashlib.sha256(fd).hexdigest())
+          if len(fd) < fd_size:
+              fd += b'\0' * (fd_size - len(fd))
+          shim = open('Mu-Silicium/BootShim/BootShim.bin', 'rb').read()
+          payload = open('payload.bin', 'rb').read()
+          payload += b'\0' * (-len(payload) % 16)
+          blob = shim + fd + payload
+          dtb = open('Mu-Silicium/Resources/DTBs/songyuan.dtb', 'rb').read()
+          kernelfield = gzip.compress(blob, 6) + dtb
+          PAGE = 4096
+          hdr = bytearray(1632)
+          hdr[0:8] = b'ANDROID!'
+          struct.pack_into('<I', hdr, 8, len(kernelfield))
+          struct.pack_into('<I', hdr, 12, 0x8000)
+          struct.pack_into('<I', hdr, 32, 0x1e00000)
+          struct.pack_into('<I', hdr, 36, PAGE)
+          pad = lambda b: b + b'\0' * (-len(b) % PAGE)
+          img = pad(bytes(hdr)) + pad(kernelfield)
+          open('out-songyuan-owndrv17.img', 'wb').write(img)
+          print('shim', len(shim), 'payload', len(payload), 'image', len(img),
+                'sha256', hashlib.sha256(img).hexdigest())
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: songyuan-owndrv17
+          path: out-songyuan-owndrv17.img
+          if-no-files-found: error
+
+
+
+
+

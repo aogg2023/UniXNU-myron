@@ -1,0 +1,63 @@
+name: unixnu-songyuan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: framework
+        uses: actions/checkout@v4
+        with:
+          path: framework
+      - name: device repo
+        uses: actions/checkout@v4
+        with:
+          repository: aogg2023/songyuan-device
+          path: songyuan-device
+      - name: uefi repo
+        uses: actions/checkout@v4
+        with:
+          repository: aogg2023/songyuan-uefi
+          path: uefi
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev lzfse python3-venv python3-pip device-tree-compiler
+          sudo apt-get install -y --no-install-recommends lzfse || true
+          which lzfse || true
+          df -h /
+      - name: resolve profiles
+        working-directory: framework
+        run: |
+          chmod +x unixnu
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -40
+          ./unixnu status --json 2>&1 | head -60
+      - name: fetch sources
+        working-directory: framework
+        run: ./unixnu fetch 2>&1 | tail -40
+      - name: ipsw info
+        working-directory: framework
+        run: ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw ipsw info 2>&1 | tail -40
+      - name: ipsw fetch
+        working-directory: framework
+        run: ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw ipsw fetch 2>&1 | tail -40
+      - name: build kernel
+        working-directory: framework
+        run: |
+          scripts/linux/setup-toolchain.py --print-packages 2>&1 | tail -20 || true
+          ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw build kernel 2>&1 | tail -80
+      - name: collect logs
+        if: always()
+        run: |
+          find framework/out -name '*.log' -newermt '-1 day' 2>/dev/null | head -20 | tar czf unixnu-logs.tgz -T - 2>/dev/null || true
+          ls -la unixnu-logs.tgz 2>/dev/null || true
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unixnu-logs
+          path: unixnu-logs.tgz
+          if-no-files-found: warn

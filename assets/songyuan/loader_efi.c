@@ -47,7 +47,7 @@ static int find_entries(const uint8_t **kernel, uint64_t *klen, const uint8_t **
     if (e->name[0]=='k' && e->name[1]=='e' && e->name[2]=='r' && e->name[3]=='n' && e->name[4]=='e' && e->name[5]=='l' && e->name[6]==0) { *kernel = data; *klen = e->size; }
     else if (e->name[0]=='a' && e->name[1]=='d' && e->name[2]=='t' && e->name[3]==0) { *adt = data; *alen = e->size; }
     else if (e->name[0]=='c' && e->name[1]=='m' && e->name[2]=='d' && e->name[3]=='l' && e->name[4]=='i' && e->name[5]=='n' && e->name[6]=='e' && e->name[7]==0) { *cmd = (const char *)data; }
-    p = (p + 24 + e->size + 15) & ~15ULL;
+    p = p + 24 + ((e->size + 15) & ~15ULL);
   }
   return *kernel != 0;
 }

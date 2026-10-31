@@ -404,7 +404,7 @@ jobs:
               if not name: break
               size = struct.unpack_from("<I", b, cur+16)[0]
               names.append((name, size))
-              cur = (cur + 24 + size + 15) & ~15
+              cur = cur + 24 + ((size + 15) & ~15)
           print("payload entries:", names)
           assert any(n == "loader.efi" for n, _ in names), "loader entry missing"
           assert any(n == "usb" for n, _ in names), "usb flag missing"
@@ -433,7 +433,7 @@ jobs:
               if not name: break
               size = struct.unpack_from('<I', b, cur+16)[0]
               names.append((name, size))
-              cur = (cur + 24 + size + 15) & ~15
+              cur = cur + 24 + ((size + 15) & ~15)
           print('payload entries:', names)
           assert any(n == 'loader.efi' for n,_ in names)
           assert any(n == 'kernel' and s > 0x1000000 for n,s in names)

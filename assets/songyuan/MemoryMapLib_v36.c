@@ -37,7 +37,7 @@ gMemoryDescriptor[] = {
   {"XNU_Payload", 0xf0000000, 0x3800000, AddMem, SYS_MEM, SYS_MEM_CAP, Reserv, WRITE_BACK_XN},
   {"SPLASH_REGION", 0xfc800000, 0x2b00000, AddMem, SYS_MEM, SYS_MEM_CAP, Reserv, WRITE_BACK_XN},
 
-  // Free DDR (from the phone live device tree)
+  // Free DDR (live DT minus reserved)
   {"DDR_Free", 0x81960000, 0xa0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0x81a60000, 0x1a0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0x82478000, 0x28000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
@@ -47,7 +47,8 @@ gMemoryDescriptor[] = {
   {"DDR_Free", 0x9959c000, 0x64000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0x9ce80000, 0x31d0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0xa0910000, 0xa70000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
-  {"DDR_Free", 0xa6980000, 0x1d450000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
+  {"DDR_Free", 0xa6980000, 0x1680000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
+  {"DDR_Free", 0xb8000000, 0xbdd0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0xc4800000, 0x2000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0xc7800000, 0x10000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0xd7c00000, 0x400000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
@@ -61,3 +62,13 @@ gMemoryDescriptor[] = {
   {"DDR_Free", 0x8b9b00000, 0x1e00000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
   {"DDR_Free", 0x8c0000000, 0x240000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK_XN},
 };
+
+VOID
+GetMemoryMap (
+  OUT EFI_MEMORY_REGION_DESCRIPTOR **MemoryDescriptor,
+  OUT UINT8                         *MemoryDescriptorCount)
+{
+  // Pass Data
+  *MemoryDescriptor      = gMemoryDescriptor;
+  *MemoryDescriptorCount = ARRAY_SIZE (gMemoryDescriptor);
+}

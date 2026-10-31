@@ -1,0 +1,70 @@
+name: unixnu-songyuan-assemble
+
+on:
+  workflow_dispatch:
+
+env:
+  UNIXNU_IPSW: https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+
+jobs:
+  assemble:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: UniXNU/UniXNU, path: framework }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-device, path: songyuan-device }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-uefi, path: uefi }
+      - name: fetch kernel artifact from macOS build
+        run: |
+          set -euo pipefail
+          mkdir -p kernel-art
+          API="https://api.github.com/repos/${{ github.repository }}/actions/workflows/unixnu-songyuan-kernel-macos.yml/runs?per_page=5"
+          RUNS=$(curl -s -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" "$API")
+          echo "$RUNS" | head -c 2000
+          for id in $(echo "$RUNS" | python3 -c "import sys,json;print(' '.join(str(r['id']) for r in json.load(sys.stdin)['workflow_runs'] if r['conclusion']=='success'))"); do
+            AID=$(curl -s -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${{ github.repository }}/actions/runs/$id/artifacts" | python3 -c "import sys,json;print(json.load(sys.stdin)['artifacts'][0]['id'])" 2>/dev/null || true)
+            if [ -n "${AID:-}" ]; then
+              echo "downloading artifact $AID from run $id"
+              curl -sL -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip" -o kernel.zip
+              unzip -o -q kernel.zip -d kernel-art && break
+            fi
+          done
+          find kernel-art -name 'kernel.macho' -exec ls -l {} \;
+          echo "KERNEL_PATH=$(find kernel-art -name 'kernel.macho' | head -1)" >> "$GITHUB_ENV"
+      - name: deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip
+          sudo apt-get install -y --no-install-recommends lzfse || true
+      - name: resolve fetch
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          chmod +x unixnu
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
+          ./unixnu status
+          ./unixnu fetch
+          ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache
+      - name: assemble
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          ./unixnu build package
+          ./unixnu build firmware --uefi ../uefi
+          ./unixnu --kernel "$KERNEL_PATH" build payload || echo "PAYLOAD_FAILED"
+          ./unixnu --kernel "$KERNEL_PATH" bootimg || echo "BOOTIMG_FAILED"
+          echo "=== files ==="
+          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' \) -exec ls -l {} \; || true
+      - name: collect
+        if: always()
+        run: |
+          mkdir -p artifacts
+          find framework/out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' \) -print0 2>/dev/null | tar --null -czf artifacts/unixnu-images.tgz -T - || true
+          du -sh artifacts/* 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: unixnu-songyuan-assembled, path: artifacts/, retention-days: 3, if-no-files-found: warn }

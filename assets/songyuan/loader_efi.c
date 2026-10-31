@@ -84,7 +84,7 @@ int efi_main(efi_handle image, efi_system_table *st){
   const uint8_t *k = kernel;
   if (*(const uint32_t *)k != 0xfeedfacf) return 2;
   uint32_t ncmds = *(const uint32_t *)(k + 16);
-  uint64_t p = 32, vm_lo = ~0ULL, vm_hi = 0, entry_va = 0;
+  uint64_t p = 32, vm_lo = ~0ULL, vm_hi = 0, entry_va = 0, text_vmaddr = 0, entry_off = 0;
   typedef struct { uint64_t vmaddr, vmsize, fileoff, filesize; } seg_t;
   seg_t segs[64]; int nsegs = 0;
   for (uint32_t i = 0; i < ncmds; i++) {
@@ -96,6 +96,7 @@ int efi_main(efi_handle image, efi_system_table *st){
       s.fileoff = *(const uint64_t *)(k + p + 40);
       s.filesize = *(const uint64_t *)(k + p + 48);
       if (nsegs < 64) segs[nsegs++] = s;
+      if (*(const uint64_t *)(k + p + 8) == 0x545845545F5FULL || (k[p+8]==0x5f && k[p+9]==0x5f && k[p+10]==0x54 && k[p+11]==0x45 && k[p+12]==0x58 && k[p+13]==0x54)) text_vmaddr = s.vmaddr;
       if (s.vmaddr < vm_lo) vm_lo = s.vmaddr;
       if (s.vmaddr + s.vmsize > vm_hi) vm_hi = s.vmaddr + s.vmsize;
     }
@@ -105,10 +106,12 @@ int efi_main(efi_handle image, efi_system_table *st){
   p = 32;
   for (uint32_t i = 0; i < ncmds; i++) {
     uint32_t c = *(const uint32_t *)(k + p), sz = *(const uint32_t *)(k + p + 4);
-    if (c == 0x80000028u) { entry_va = vm_lo + *(const uint64_t *)(k + p + 8); break; }
+    if (c == 0x80000028u) { entry_off = *(const uint64_t *)(k + p + 8); break; }
     p += sz;
   }
-  if (entry_va == 0) entry_va = vm_lo + 0x4000;
+  if (text_vmaddr == 0) text_vmaddr = vm_lo;
+  entry_va = text_vmaddr + entry_off;
+  if (entry_off == 0 || entry_va < vm_lo || entry_va >= vm_hi) entry_va = vm_lo + 0x4000;
   /* reserve a RAM window through the firmware so nothing it owns is overwritten */
   uint64_t phys_base = 0, mem_size = 0;
   {
@@ -124,7 +127,7 @@ int efi_main(efi_handle image, efi_system_table *st){
     if (phys_base == 0) return 4;
     if (mem_size > 0x13ff00000ULL) mem_size = 0x13ff00000ULL;
   }
-  uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);
+  uint64_t virt_base = text_vmaddr & ~(0x2000000ULL - 1);
   uint64_t pa_of_va = phys_base - virt_base;
   uint64_t kern_end_pa = align_up(vm_hi + pa_of_va, 0x4000ULL);
   uint64_t adt_pa = kern_end_pa;

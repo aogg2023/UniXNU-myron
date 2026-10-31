@@ -111,10 +111,11 @@ int efi_main(efi_handle image, efi_system_table *st){
   for (uint32_t i = 0; i < ncmds; i++) {
     uint32_t c = *(const uint32_t *)(k + p), sz = *(const uint32_t *)(k + p + 4);
     if (c == 0x80000028u) { entry_off = *(const uint64_t *)(k + p + 8); break; }
+    if (c == 0x5u && sz >= 16 + 33 * 8) { entry_va = *(const uint64_t *)(k + p + 16 + 32 * 8); break; }
     p += sz;
   }
   if (text_vmaddr == 0) text_vmaddr = vm_lo;
-  entry_va = text_vmaddr + entry_off;
+  if (entry_va == 0) entry_va = text_vmaddr + entry_off;
   if (entry_off == 0 || entry_va < vm_lo || entry_va >= vm_hi) entry_va = vm_lo + 0x4000;
   /* reserve a RAM window through the firmware so nothing it owns is overwritten */
   uint64_t phys_base = 0, mem_size = 0;
@@ -142,8 +143,10 @@ int efi_main(efi_handle image, efi_system_table *st){
   if (top > phys_base + mem_size) return 3;
   for (int i = 0; i < nsegs; i++) {
     uint64_t dst = segs[i].vmaddr + pa_of_va;
-    copy_bytes(dst, (uint64_t)(uintptr_t)(kernel + segs[i].fileoff), segs[i].filesize);
-    if (segs[i].vmsize > segs[i].filesize) zero_bytes(dst + segs[i].filesize, segs[i].vmsize - segs[i].filesize);
+    uint64_t have = segs[i].fileoff < klen ? klen - segs[i].fileoff : 0;
+    if (have > segs[i].filesize) have = segs[i].filesize;
+    if (have) copy_bytes(dst, (uint64_t)(uintptr_t)(kernel + segs[i].fileoff), have);
+    if (segs[i].vmsize > have) zero_bytes(dst + have, segs[i].vmsize - have);
   }
   copy_bytes(adt_pa, (uint64_t)(uintptr_t)adt, alen);
   zero_bytes(ba_pa, 0x4000);

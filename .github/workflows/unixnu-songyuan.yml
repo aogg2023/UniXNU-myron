@@ -3,10 +3,13 @@ name: unixnu-songyuan
 on:
   workflow_dispatch:
 
+env:
+  IPSW: https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 300
     steps:
       - name: framework
         uses: actions/checkout@v4
@@ -25,39 +28,57 @@ jobs:
       - name: deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev lzfse python3-venv python3-pip device-tree-compiler
+          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip git-lfs zip
           sudo apt-get install -y --no-install-recommends lzfse || true
           which lzfse || true
-          df -h /
-      - name: resolve profiles
+          df -h / | tail -1
+      - name: resolve and fetch
         working-directory: framework
         run: |
           chmod +x unixnu
-          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -40
-          ./unixnu status --json 2>&1 | head -60
-      - name: fetch sources
-        working-directory: framework
-        run: ./unixnu fetch 2>&1 | tail -40
-      - name: ipsw info
-        working-directory: framework
-        run: ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw ipsw info 2>&1 | tail -40
-      - name: ipsw fetch
-        working-directory: framework
-        run: ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw ipsw fetch 2>&1 | tail -40
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -20
+          ./unixnu fetch 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" ipsw info 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" ipsw fetch 2>&1 | tail -20
       - name: build kernel
         working-directory: framework
         run: |
-          scripts/linux/setup-toolchain.py --print-packages 2>&1 | tail -20 || true
-          ./unixnu --ipsw https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw build kernel 2>&1 | tail -80
-      - name: collect logs
+          scripts/linux/setup-toolchain.py --print-packages 2>&1 | tail -10 || true
+          ./unixnu --ipsw "$IPSW" build kernel 2>&1 | tail -60
+          find out -name 'kernel.macho' -exec ls -l {} \; 2>/dev/null | tail -3
+      - name: build package
+        working-directory: framework
+        run: |
+          ./unixnu --ipsw "$IPSW" build package 2>&1 | tail -60
+          find out -path '*package*' -name '*.efi' -exec ls -l {} \; 2>/dev/null | head -10
+      - name: build firmware
+        working-directory: framework
+        run: |
+          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi 2>&1 | tail -80 || echo "FIRMWARE STEP FAILED"
+      - name: build payload
+        working-directory: framework
+        run: |
+          ./unixnu --ipsw "$IPSW" build payload 2>&1 | tail -60 || echo "PAYLOAD STEP FAILED"
+          find out -name 'payload.img' -exec ls -l {} \; 2>/dev/null | head -3
+      - name: build bootimg
+        working-directory: framework
+        run: |
+          ./unixnu --ipsw "$IPSW" bootimg 2>&1 | tail -60 || echo "BOOTIMG STEP FAILED"
+          find out -name '*.img' -exec ls -l {} \; 2>/dev/null | head -10
+      - name: collect outputs
         if: always()
         run: |
-          find framework/out -name '*.log' -newermt '-1 day' 2>/dev/null | head -20 | tar czf unixnu-logs.tgz -T - 2>/dev/null || true
-          ls -la unixnu-logs.tgz 2>/dev/null || true
-      - name: upload logs
+          mkdir -p artifacts
+          find framework/out -name 'boot*.img' -o -name 'payload.img' -o -name 'kernel.macho' -o -name '*.fd' 2>/dev/null | head -20 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
+          find framework/out -name '*.json' 2>/dev/null | head -20 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
+          find framework/out -name '*.log' 2>/dev/null | tail -30 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
+          du -sh artifacts 2>/dev/null || true
+          ls -la artifacts 2>/dev/null | head
+      - name: upload outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unixnu-logs
-          path: unixnu-logs.tgz
+          name: unixnu-songyuan-out
+          path: artifacts/
+          retention-days: 3
           if-no-files-found: warn

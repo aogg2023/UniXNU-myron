@@ -68,8 +68,14 @@ static void jump_to_kernel(uint64_t entry, uint64_t boot_args){
     "br %0\n" : : "r"(entry), "r"(boot_args) : "x0","x2","x3");
   __builtin_unreachable();
 }
-typedef struct { uint8_t hdr[24]; void *fw_vendor; uint32_t fw_rev; uint8_t pad[4]; void *con_in; void *con_out; void *con_err; void *rts; void *bs; uint64_t num; void *cfg; } systab_t;\ntypedef struct { uint8_t hdr[24]; void *raise; void *restore; void *alloc; void *free; uint32_t (*get_memory_map)(uint64_t *, void *, uint64_t *, uint64_t *, uint32_t *); } bootsvc_t;\nint efi_main(efi_handle image, efi_system_table *st){
-  (void)image;\n  bootsvc_t *bgbs = (bootsvc_t *)((systab_t *)st)->bs;\n  (void)bgbs;
+typedef struct { uint8_t hdr[24]; void *fw_vendor; uint32_t fw_rev; uint8_t pad[4];
+  void *con_in_handle; void *con_in; void *con_out_handle; void *con_out;
+  void *stderr_handle; void *stderr; void *rts; void *bs; uint64_t num; void *cfg; } systab_t;
+typedef struct { uint8_t hdr[24]; void *raise; void *restore; void *alloc; void *free; uint32_t (*get_memory_map)(uint64_t *, void *, uint64_t *, uint64_t *, uint32_t *); } bootsvc_t;
+int efi_main(efi_handle image, efi_system_table *st){
+  (void)image;
+  bootsvc_t *bgbs = (bootsvc_t *)((systab_t *)st)->bs;
+  (void)bgbs;
   const uint8_t *kernel, *adt; uint64_t klen = 0, alen = 0; const char *cmd;
   if (!find_entries(&kernel, &klen, &adt, &alen, &cmd)) return 1;
   const uint8_t *k = kernel;

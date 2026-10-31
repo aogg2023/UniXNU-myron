@@ -28,52 +28,37 @@ jobs:
       - name: deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip git-lfs zip
+          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip
           sudo apt-get install -y --no-install-recommends lzfse || true
-          which lzfse || true
           df -h / | tail -1
       - name: resolve and fetch
         working-directory: framework
         run: |
           chmod +x unixnu
-          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -20
-          ./unixnu fetch 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" ipsw info 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" ipsw fetch 2>&1 | tail -20
-      - name: build kernel
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -10
+          ./unixnu fetch 2>&1 | tail -10
+          ./unixnu --ipsw "$IPSW" ipsw fetch 2>&1 | tail -10
+      - name: build kernel package firmware payload bootimg
         working-directory: framework
         run: |
-          scripts/linux/setup-toolchain.py --print-packages 2>&1 | tail -10 || true
-          ./unixnu --ipsw "$IPSW" build kernel 2>&1 | tail -60
-          find out -name 'kernel.macho' -exec ls -l {} \; 2>/dev/null | tail -3
-      - name: build package
-        working-directory: framework
-        run: |
-          ./unixnu --ipsw "$IPSW" build package 2>&1 | tail -60
-          find out -path '*package*' -name '*.efi' -exec ls -l {} \; 2>/dev/null | head -10
-      - name: build firmware
-        working-directory: framework
-        run: |
-          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi 2>&1 | tail -80 || echo "FIRMWARE STEP FAILED"
-      - name: build payload
-        working-directory: framework
-        run: |
-          ./unixnu --ipsw "$IPSW" build payload 2>&1 | tail -60 || echo "PAYLOAD STEP FAILED"
-          find out -name 'payload.img' -exec ls -l {} \; 2>/dev/null | head -3
-      - name: build bootimg
-        working-directory: framework
-        run: |
-          ./unixnu --ipsw "$IPSW" bootimg 2>&1 | tail -60 || echo "BOOTIMG STEP FAILED"
-          find out -name '*.img' -exec ls -l {} \; 2>/dev/null | head -10
+          ./unixnu --ipsw "$IPSW" build kernel 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" build package 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" build payload 2>&1 | tail -20
+          ./unixnu --ipsw "$IPSW" bootimg 2>&1 | tail -20
+          echo "=== output tree (dirs) ==="
+          find out -maxdepth 5 -type d | head -60
+          echo "=== output files ==="
+          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' -o -name 'userdata-root.json' \) -exec ls -l {} \; 2>/dev/null
       - name: collect outputs
         if: always()
         run: |
           mkdir -p artifacts
-          find framework/out -name 'boot*.img' -o -name 'payload.img' -o -name 'kernel.macho' -o -name '*.fd' 2>/dev/null | head -20 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
-          find framework/out -name '*.json' 2>/dev/null | head -20 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
-          find framework/out -name '*.log' 2>/dev/null | tail -30 | xargs -r -I{} cp --parents {} artifacts/ 2>/dev/null || true
-          du -sh artifacts 2>/dev/null || true
-          ls -la artifacts 2>/dev/null | head
+          cd framework
+          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name '*.json' -o -name '*.log' \) -print0 | tar --null -czf ../artifacts/unixnu-out.tgz -T - 2>/dev/null || true
+          cd ..
+          ls -la artifacts
+          du -sh artifacts/* 2>/dev/null
       - name: upload outputs
         if: always()
         uses: actions/upload-artifact@v4

@@ -109,7 +109,7 @@ int efi_main(efi_handle image, efi_system_table *st){
   /* pick a free RAM window from the firmware memory map instead of a fixed address */
   uint64_t phys_base = 0, mem_size = 0;
   {
-    uint8_t buf[16384]; uint64_t sz = sizeof(buf), key = 0, dsz = 0; uint32_t dver = 0;
+    static uint8_t buf[16384]; uint64_t sz = sizeof(buf), key = 0, dsz = 0; uint32_t dver = 0;
     typedef struct { uint32_t Type; uint32_t pad; uint64_t PhysicalStart, VirtualStart, NumberOfPages, Attribute; } desc_t;
     if (bgbs != 0 && bgbs->get_memory_map(&sz, buf, &key, &dsz, &dver) == 0) {
       uint64_t n = sz / dsz;

@@ -71,7 +71,10 @@ static void jump_to_kernel(uint64_t entry, uint64_t boot_args){
 typedef struct { uint8_t hdr[24]; void *fw_vendor; uint32_t fw_rev; uint8_t pad[4];
   void *con_in_handle; void *con_in; void *con_out_handle; void *con_out;
   void *stderr_handle; void *stderr; void *rts; void *bs; uint64_t num; void *cfg; } systab_t;
-typedef struct { uint8_t hdr[24]; void *raise; void *restore; void *alloc; void *free; uint32_t (*get_memory_map)(uint64_t *, void *, uint64_t *, uint64_t *, uint32_t *); } bootsvc_t;
+typedef struct { uint8_t hdr[24]; void *raise; void *restore;
+  uint64_t (*alloc_pages)(uint32_t, uint32_t, uint64_t, uint64_t *);
+  uint64_t (*free_pages)(uint64_t, uint64_t);
+  uint64_t (*get_memory_map)(uint64_t *, void *, uint64_t *, uint64_t *, uint32_t *); } bootsvc_t;
 int efi_main(efi_handle image, efi_system_table *st){
   (void)image;
   bootsvc_t *bgbs = (bootsvc_t *)((systab_t *)st)->bs;
@@ -106,23 +109,19 @@ int efi_main(efi_handle image, efi_system_table *st){
     p += sz;
   }
   if (entry_va == 0) entry_va = vm_lo + 0x4000;
-  /* pick a free RAM window from the firmware memory map instead of a fixed address */
+  /* reserve a RAM window through the firmware so nothing it owns is overwritten */
   uint64_t phys_base = 0, mem_size = 0;
   {
-    static uint8_t buf[16384]; uint64_t sz = sizeof(buf), key = 0, dsz = 0; uint32_t dver = 0;
-    typedef struct { uint32_t Type; uint32_t pad; uint64_t PhysicalStart, VirtualStart, NumberOfPages, Attribute; } desc_t;
-    if (bgbs != 0 && bgbs->get_memory_map(&sz, buf, &key, &dsz, &dver) == 0) {
-      uint64_t n = sz / dsz;
-      for (uint64_t i = 0; i < n; i++) {
-        desc_t *d = (desc_t *)(buf + i * dsz);
-        uint64_t start = d->PhysicalStart, len = d->NumberOfPages << 12;
-        if (d->Type != 7 || len < 0x40000000ULL) continue;
-        if (start < XNUP_BASE + 0x4000000ULL && start + len > XNUP_BASE) continue;
-        if (len > mem_size) { mem_size = len; phys_base = start; }
+    for (uint64_t pages = 0x40000; pages >= 0x8000; pages >>= 1) {
+      uint64_t addr = 0;
+      if (bgbs->alloc_pages(0, 2, pages, &addr) == 0) {
+        uint64_t aligned = (addr + 0x1FFFFFFULL) & ~0x1FFFFFFULL;
+        uint64_t end = addr + (pages << 12);
+        if (end > aligned + 0x20000000ULL) { phys_base = aligned; mem_size = end - aligned; break; }
+        bgbs->free_pages(addr, pages);
       }
     }
     if (phys_base == 0) return 4;
-    phys_base = (phys_base + 0x1FFFFFULL) & ~0x1FFFFFULL;
     if (mem_size > 0x13ff00000ULL) mem_size = 0x13ff00000ULL;
   }
   uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);

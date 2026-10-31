@@ -9,7 +9,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 320
     steps:
       - uses: actions/checkout@v4
         with: { repository: UniXNU/UniXNU, path: framework }
@@ -21,14 +21,22 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip
+          sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip unifdef
           sudo apt-get install -y --no-install-recommends lzfse || true
           df -h / | tail -1
-      - name: resolve and fetch
+      - name: linux toolchain
         working-directory: framework
         run: |
           set -euo pipefail
-          chmod +x unixnu
+          chmod +x unixnu scripts/linux/setup-toolchain.py
+          scripts/linux/setup-toolchain.py --print-packages || true
+          sudo scripts/linux/setup-toolchain.py
+          which unifdef || true
+          which lzfse || true
+      - name: resolve fetch
+        working-directory: framework
+        run: |
+          set -euo pipefail
           ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
           ./unixnu status
           ./unixnu fetch

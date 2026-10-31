@@ -68,8 +68,8 @@ static void jump_to_kernel(uint64_t entry, uint64_t boot_args){
     "br %0\n" : : "r"(entry), "r"(boot_args) : "x0","x2","x3");
   __builtin_unreachable();
 }
-int efi_main(efi_handle image, efi_system_table *st){
-  (void)image; (void)st;
+typedef struct { uint8_t hdr[24]; void *fw_vendor; uint32_t fw_rev; uint8_t pad[4]; void *con_in; void *con_out; void *con_err; void *rts; void *bs; uint64_t num; void *cfg; } systab_t;\ntypedef struct { uint8_t hdr[24]; void *raise; void *restore; void *alloc; void *free; uint32_t (*get_memory_map)(uint64_t *, void *, uint64_t *, uint64_t *, uint32_t *); } bootsvc_t;\nint efi_main(efi_handle image, efi_system_table *st){
+  (void)image;\n  bootsvc_t *bgbs = (bootsvc_t *)((systab_t *)st)->bs;\n  (void)bgbs;
   const uint8_t *kernel, *adt; uint64_t klen = 0, alen = 0; const char *cmd;
   if (!find_entries(&kernel, &klen, &adt, &alen, &cmd)) return 1;
   const uint8_t *k = kernel;
@@ -100,13 +100,32 @@ int efi_main(efi_handle image, efi_system_table *st){
     p += sz;
   }
   if (entry_va == 0) entry_va = vm_lo + 0x4000;
-  uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);
-  uint64_t pa_of_va = PHYS_BASE - virt_base;
+'  /* pick a free RAM window from the firmware memory map instead of a fixed address */
+  uint64_t phys_base = 0, mem_size = 0;
+  {
+    uint8_t buf[16384]; uint64_t sz = sizeof(buf), key = 0, dsz = 0; uint32_t dver = 0;
+    typedef struct { uint32_t Type; uint32_t pad; uint64_t PhysicalStart, VirtualStart, NumberOfPages, Attribute; } desc_t;
+    if (bgbs != 0 && bgbs->get_memory_map(&sz, buf, &key, &dsz, &dver) == 0) {
+      uint64_t n = sz / dsz;
+      for (uint64_t i = 0; i < n; i++) {
+        desc_t *d = (desc_t *)(buf + i * dsz);
+        uint64_t start = d->PhysicalStart, len = d->NumberOfPages << 12;
+        if (d->Type != 7 || len < 0x40000000ULL) continue;
+        if (start < XNUP_BASE + 0x4000000ULL && start + len > XNUP_BASE) continue;
+        if (len > mem_size) { mem_size = len; phys_base = start; }
+      }
+    }
+    if (phys_base == 0) return 4;
+    phys_base = (phys_base + 0x1FFFFFULL) & ~0x1FFFFFULL;
+    if (mem_size > 0x13ff00000ULL) mem_size = 0x13ff00000ULL;
+  }
+  uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);'
+  uint64_t pa_of_va = phys_base - virt_base;
   uint64_t kern_end_pa = align_up(vm_hi + pa_of_va, 0x4000ULL);
   uint64_t adt_pa = kern_end_pa;
   uint64_t ba_pa = align_up(adt_pa + alen, 0x4000ULL);
   uint64_t top = ba_pa + 0x4000;
-  if (top > PHYS_BASE + MEM_SIZE) return 3;
+  if (top > phys_base + mem_size) return 3;
   for (int i = 0; i < nsegs; i++) {
     uint64_t dst = segs[i].vmaddr + pa_of_va;
     copy_bytes(dst, (uint64_t)(uintptr_t)(kernel + segs[i].fileoff), segs[i].filesize);
@@ -117,8 +136,8 @@ int efi_main(efi_handle image, efi_system_table *st){
   volatile struct boot_args *ba = (volatile struct boot_args *)(uintptr_t)ba_pa;
   ba->Revision = 2; ba->Version = 2;
   ba->virtBase = virt_base;
-  ba->physBase = PHYS_BASE;
-  ba->memSize = MEM_SIZE;
+  ba->physBase = phys_base;
+  ba->memSize = mem_size;
   ba->topOfKernelData = top;
   ba->Video.v_baseAddr = FB_BASE;
   ba->Video.v_display = 0; /* -v: show kernel text */
@@ -131,6 +150,6 @@ int efi_main(efi_handle image, efi_system_table *st){
   uint64_t n = 0; const char *c = cmd;
   while (*c && n < BOOT_LINE - 1) ba->CommandLine[n++] = *c++;
   ba->bootFlags = 0;
-  ba->memSizeActual = MEM_SIZE;
+  ba->memSizeActual = mem_size;
   jump_to_kernel(entry_va + pa_of_va, ba_pa);
 }

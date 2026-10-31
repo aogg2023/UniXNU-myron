@@ -1,0 +1,52 @@
+name: unixnu-songyuan-kernel-macos
+
+on:
+  workflow_dispatch:
+
+env:
+  UNIXNU_IPSW: https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+
+jobs:
+  kernel:
+    runs-on: macos-14
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: UniXNU/UniXNU, path: framework }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-device, path: songyuan-device }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-uefi, path: uefi }
+      - name: xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+          xcrun --find iig || true
+          xcrun --find compression_tool
+          df -h /
+      - name: resolve fetch ipsw
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          chmod +x unixnu
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
+          ./unixnu status
+          ./unixnu fetch
+          ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache 2>&1 | tail -30 || ./unixnu ipsw fetch
+      - name: build kernel
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          ./unixnu build kernel
+          find out -name 'kernel.macho' -exec ls -l {} \;
+      - name: upload kernel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unixnu-songyuan-kernel
+          path: |
+            framework/out/**/kernel.macho
+            framework/out/**/*.json
+          retention-days: 3
+          if-no-files-found: warn

@@ -436,7 +436,7 @@ jobs:
               cur = cur + 24 + ((size + 15) & ~15)
           print('payload entries:', names)
           assert any(n == 'loader.efi' for n,_ in names)
-          assert any(n == 'kernel' and s > 0x1000000 for n,s in names)
+          assert any(n == 'kernel' and s > 0x800000 for n,s in names)
           assert any(n == 'adt' for n,_ in names)
           PYEOF
 

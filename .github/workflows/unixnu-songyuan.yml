@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  IPSW: https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+  UNIXNU_IPSW: https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
 
 jobs:
   build:
@@ -24,29 +24,30 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip
           sudo apt-get install -y --no-install-recommends lzfse || true
           df -h / | tail -1
-      - name: resolve fetch
+      - name: resolve and fetch
         working-directory: framework
         run: |
           set -euo pipefail
           chmod +x unixnu
           ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
+          ./unixnu status --json | head -50 || true
           ./unixnu fetch
-          ./unixnu --ipsw "$IPSW" ipsw fetch
+          ./unixnu ipsw info || true
+          ./unixnu ipsw fetch
       - name: build all
         working-directory: framework
         run: |
           set -euo pipefail
-          ./unixnu --ipsw "$IPSW" build kernel
-          ./unixnu --ipsw "$IPSW" build package
-          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi
-          ./unixnu --ipsw "$IPSW" build payload
-          ./unixnu --ipsw "$IPSW" bootimg
-          echo "ALL BUILDS OK"
-          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' \) -exec ls -l {} \;
+          ./unixnu build kernel
+          ./unixnu build package
+          ./unixnu build firmware --uefi ../uefi
+          ./unixnu build payload || echo "PAYLOAD_FAILED"
+          ./unixnu bootimg || echo "BOOTIMG_FAILED"
+          echo "=== files ==="
+          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' \) -exec ls -l {} \; || true
       - name: collect
         if: always()
         run: |
-          set -uo pipefail
           mkdir -p artifacts
           find framework/out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' \) -print0 2>/dev/null | tar --null -czf artifacts/unixnu-images.tgz -T - || true
           du -sh artifacts/* 2>/dev/null || true

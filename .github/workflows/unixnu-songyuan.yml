@@ -11,59 +11,45 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
-      - name: framework
-        uses: actions/checkout@v4
-        with:
-          path: framework
-      - name: device repo
-        uses: actions/checkout@v4
-        with:
-          repository: aogg2023/songyuan-device
-          path: songyuan-device
-      - name: uefi repo
-        uses: actions/checkout@v4
-        with:
-          repository: aogg2023/songyuan-uefi
-          path: uefi
+      - uses: actions/checkout@v4
+        with: { path: framework }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-device, path: songyuan-device }
+      - uses: actions/checkout@v4
+        with: { repository: aogg2023/songyuan-uefi, path: uefi }
       - name: deps
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang llvm lld nasm acpica-tools uuid-dev libssl-dev mtools dosfstools lz4 liblz4-dev device-tree-compiler python3-venv python3-pip zip
           sudo apt-get install -y --no-install-recommends lzfse || true
           df -h / | tail -1
-      - name: resolve and fetch
+      - name: resolve fetch
         working-directory: framework
         run: |
+          set -euo pipefail
           chmod +x unixnu
-          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device 2>&1 | tail -10
-          ./unixnu fetch 2>&1 | tail -10
-          ./unixnu --ipsw "$IPSW" ipsw fetch 2>&1 | tail -10
-      - name: build kernel package firmware payload bootimg
+          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
+          ./unixnu fetch
+          ./unixnu --ipsw "$IPSW" ipsw fetch
+      - name: build all
         working-directory: framework
         run: |
-          ./unixnu --ipsw "$IPSW" build kernel 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" build package 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" build payload 2>&1 | tail -20
-          ./unixnu --ipsw "$IPSW" bootimg 2>&1 | tail -20
-          echo "=== output tree (dirs) ==="
-          find out -maxdepth 5 -type d | head -60
-          echo "=== output files ==="
-          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' -o -name 'userdata-root.json' \) -exec ls -l {} \; 2>/dev/null
-      - name: collect outputs
+          set -euo pipefail
+          ./unixnu --ipsw "$IPSW" build kernel
+          ./unixnu --ipsw "$IPSW" build package
+          ./unixnu --ipsw "$IPSW" build firmware --uefi ../uefi
+          ./unixnu --ipsw "$IPSW" build payload
+          ./unixnu --ipsw "$IPSW" bootimg
+          echo "ALL BUILDS OK"
+          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' \) -exec ls -l {} \;
+      - name: collect
         if: always()
         run: |
+          set -uo pipefail
           mkdir -p artifacts
-          cd framework
-          find out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name '*.json' -o -name '*.log' \) -print0 | tar --null -czf ../artifacts/unixnu-out.tgz -T - 2>/dev/null || true
-          cd ..
-          ls -la artifacts
-          du -sh artifacts/* 2>/dev/null
-      - name: upload outputs
+          find framework/out -type f \( -name '*.img' -o -name '*.macho' -o -name '*.efi' -o -name '*.fd' -o -name 'boot.json' -o -name 'payload.json' \) -print0 2>/dev/null | tar --null -czf artifacts/unixnu-images.tgz -T - || true
+          du -sh artifacts/* 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unixnu-songyuan-out
-          path: artifacts/
-          retention-days: 3
-          if-no-files-found: warn
+        with: { name: unixnu-songyuan-out, path: artifacts/, retention-days: 3, if-no-files-found: warn }

@@ -22,7 +22,6 @@ jobs:
           set -euo pipefail
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
           xcodebuild -version
-          xcrun --find iig || true
           xcrun --find compression_tool
           df -h /
       - name: resolve fetch ipsw
@@ -33,20 +32,27 @@ jobs:
           ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
           ./unixnu status
           ./unixnu fetch
-          ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache 2>&1 | tail -30 || ./unixnu ipsw fetch
+          ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache
       - name: build kernel
         working-directory: framework
         run: |
-          set -euo pipefail
-          ./unixnu build kernel
-          find out -name 'kernel.macho' -exec ls -l {} \;
-      - name: upload kernel
+          set -uo pipefail
+          ./unixnu build kernel; rc=$?
+          echo "kernel build rc=$rc"
+          for f in out/songyuan/logs/*.log; do echo "=== $f (tail) ==="; tail -80 "$f" || true; done
+          exit $rc
+      - name: show logs on failure
+        if: failure()
+        working-directory: framework
+        run: |
+          for f in out/songyuan/logs/*.log; do echo "=== $f ==="; tail -120 "$f" || true; done
+      - name: collect logs
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unixnu-songyuan-kernel
-          path: |
-            framework/out/**/kernel.macho
-            framework/out/**/*.json
-          retention-days: 3
-          if-no-files-found: warn
+        run: |
+          mkdir -p artifacts
+          find framework/out -name '*.log' -print0 2>/dev/null | tar --null -czf artifacts/kernel-logs.tgz -T - || true
+          find framework/out -name 'kernel.macho' -exec ls -l {} \; 2>/dev/null || true
+          du -sh artifacts/* 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: unixnu-songyuan-kernel, path: artifacts/, retention-days: 3, if-no-files-found: warn }

@@ -34,6 +34,8 @@ static void zero_bytes(uint64_t dst, uint64_t n){
   for (uint64_t i = 0; i < n / 8; i++) d[i] = 0;
 }
 static uint64_t str_len(const char *s){ uint64_t n=0; while (s[n]) n++; return n; }
+static char pv_virtbase[32] = {0}, pv_entry[32] = {0};
+static uint64_t hex_u64(const char *s){ uint64_t v=0; if (s[0]=='0' && (s[1]=='x'||s[1]=='X')) s+=2; while (*s) { char c=*s++; uint64_t d=(c>='0'&&c<='9')?c-'0':(c>='a'&&c<='f')?c-'a'+10:(c>='A'&&c<='F')?c-'A'+10:99; if(d>15) break; v=(v<<4)|d; } return v; }
 static int find_entries(const uint8_t **kernel, uint64_t *klen, const uint8_t **adt, uint64_t *alen, const char **cmd){
   const struct xhdr *h = (const struct xhdr *)(uintptr_t)XNUP_BASE;
   if (h->magic != 0x50554E58u) return 0;
@@ -47,6 +49,8 @@ static int find_entries(const uint8_t **kernel, uint64_t *klen, const uint8_t **
     if (e->name[0]=='k' && e->name[1]=='e' && e->name[2]=='r' && e->name[3]=='n' && e->name[4]=='e' && e->name[5]=='l' && e->name[6]==0) { *kernel = data; *klen = e->size; }
     else if (e->name[0]=='a' && e->name[1]=='d' && e->name[2]=='t' && e->name[3]==0) { *adt = data; *alen = e->size; }
     else if (e->name[0]=='c' && e->name[1]=='m' && e->name[2]=='d' && e->name[3]=='l' && e->name[4]=='i' && e->name[5]=='n' && e->name[6]=='e' && e->name[7]==0) { *cmd = (const char *)data; }
+    else if (e->name[0]=='v' && e->name[1]=='i' && e->name[2]=='r' && e->name[3]=='t' && e->name[4]=='b' && e->name[5]=='a' && e->name[6]=='s' && e->name[7]=='e' && e->name[8]==0) { for(int i=0;i<31&&i<(int)e->size;i++) pv_virtbase[i]=(char)data[i]; }
+    else if (e->name[0]=='e' && e->name[1]=='n' && e->name[2]=='t' && e->name[3]=='r' && e->name[4]=='y' && e->name[5]==0) { for(int i=0;i<31&&i<(int)e->size;i++) pv_entry[i]=(char)data[i]; }
     p = p + 24 + ((e->size + 15) & ~15ULL);
   }
   return *kernel != 0;
@@ -128,6 +132,8 @@ int efi_main(efi_handle image, efi_system_table *st){
     if (mem_size > 0x13ff00000ULL) mem_size = 0x13ff00000ULL;
   }
   uint64_t virt_base = text_vmaddr & ~(0x2000000ULL - 1);
+  if (pv_virtbase[0]) virt_base = hex_u64(pv_virtbase);
+  if (pv_entry[0]) entry_va = hex_u64(pv_entry);
   uint64_t pa_of_va = phys_base - virt_base;
   uint64_t kern_end_pa = align_up(vm_hi + pa_of_va, 0x4000ULL);
   uint64_t adt_pa = kern_end_pa;

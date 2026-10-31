@@ -392,7 +392,7 @@ jobs:
           export BUILD_ID=$(git -C .. rev-parse HEAD)
           bash build.sh
           cd ../..
-          printf '0xfffffff006000000' > virtbase.txt\n          printf '0xfffffff007414488' > entry.txt\n          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
+          python3 hk/xnuloader/mkpayload.py -o payload.bin loader.efi=hk/xnuloader/loader-phone.efi --usb
           python3 - <<'PYEOF'
           import struct
           b = open("payload.bin","rb").read()
@@ -410,6 +410,26 @@ jobs:
           assert any(n == "usb" for n, _ in names), "usb flag missing"
           PYEOF
 
+      - name: verify the kernel entry/virt-base offline before building
+        run: |
+          python3 - <<'PYEOF'
+          import struct
+          k = open('assets/songyuan/kernel-d22ap.macho','rb').read()
+          ncmds = struct.unpack_from('<I', k, 16)[0]
+          p, text, entry, off = 32, None, None, None
+          for _ in range(ncmds):
+              cmd, sz = struct.unpack_from('<II', k, p)
+              if cmd == 0x19 and k[p+8:p+24].split(b'\0')[0] == b'__TEXT':
+                  text = struct.unpack_from('<Q', k, p+24)[0]
+              if cmd == 0x5:
+                  entry = struct.unpack_from('<Q', k, p+16+32*8)[0]
+              p += sz
+          virt = text & ~(0x2000000-1)
+          print('kernel __TEXT', hex(text), 'entry', hex(entry), 'virt_base', hex(virt))
+          assert virt == 0xfffffff006000000, hex(virt)
+          assert entry == 0xfffffff007414488, hex(entry)
+          print('kernel entry/virt-base verified')
+          PYEOF
       - name: build our EFI loader (data-a-live boot contract) and its XNUP payload
         run: |
           clang --target=aarch64-unknown-windows-msvc -ffreestanding -nostdlib -Os \
@@ -417,7 +437,7 @@ jobs:
           lld-link /subsystem:efi_application /entry:efi_main /base:0xA1000000 \
             /nodefaultlib /out:loader_efi.efi loader_efi.o
           ls -l loader_efi.efi
-          printf '0xfffffff006000000' > virtbase.txt\n          printf '0xfffffff007414488' > entry.txt\n          python3 hk/xnuloader/mkpayload.py -o payload.bin \
+          python3 hk/xnuloader/mkpayload.py -o payload.bin \
             loader.efi=loader_efi.efi \
             kernel=assets/songyuan/kernel-d22ap.macho \
             adt=assets/songyuan/phone.adt \
@@ -437,7 +457,7 @@ jobs:
           print('payload entries:', names)
           assert any(n == 'loader.efi' for n,_ in names)
           assert any(n == 'kernel' and s > 0x800000 for n,s in names)
-          assert any(n == 'adt' for n,_ in names)\n          assert any(n == 'virtbase' for n,_ in names)\n          assert any(n == 'entry' for n,_ in names)
+          assert any(n == 'adt' for n,_ in names)
           PYEOF
 
       - name: nasm shim and venv

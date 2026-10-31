@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
-        with: { path: framework }
+        with: { repository: UniXNU/UniXNU, path: framework }
       - uses: actions/checkout@v4
         with: { repository: aogg2023/songyuan-device, path: songyuan-device }
       - uses: actions/checkout@v4
@@ -30,9 +30,8 @@ jobs:
           set -euo pipefail
           chmod +x unixnu
           ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
-          ./unixnu status --json | head -50 || true
+          ./unixnu status
           ./unixnu fetch
-          ./unixnu ipsw info || true
           ./unixnu ipsw fetch
       - name: build all
         working-directory: framework

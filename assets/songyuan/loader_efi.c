@@ -106,7 +106,7 @@ int efi_main(efi_handle image, efi_system_table *st){
     p += sz;
   }
   if (entry_va == 0) entry_va = vm_lo + 0x4000;
-'  /* pick a free RAM window from the firmware memory map instead of a fixed address */
+  /* pick a free RAM window from the firmware memory map instead of a fixed address */
   uint64_t phys_base = 0, mem_size = 0;
   {
     uint8_t buf[16384]; uint64_t sz = sizeof(buf), key = 0, dsz = 0; uint32_t dver = 0;
@@ -125,7 +125,7 @@ int efi_main(efi_handle image, efi_system_table *st){
     phys_base = (phys_base + 0x1FFFFFULL) & ~0x1FFFFFULL;
     if (mem_size > 0x13ff00000ULL) mem_size = 0x13ff00000ULL;
   }
-  uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);'
+  uint64_t virt_base = vm_lo & ~(0x2000000ULL - 1);
   uint64_t pa_of_va = phys_base - virt_base;
   uint64_t kern_end_pa = align_up(vm_hi + pa_of_va, 0x4000ULL);
   uint64_t adt_pa = kern_end_pa;

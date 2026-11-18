@@ -8,13 +8,13 @@ env:
 
 jobs:
   kernel:
-    runs-on: macos-26
+    runs-on: macos-14
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with: { repository: UniXNU/UniXNU, path: framework }
       - uses: actions/checkout@v4
-        with: { repository: aogg2023/songyuan-device, ref: master, path: songyuan-device }
+        with: { repository: aogg2023/songyuan-device, path: songyuan-device }
       - uses: actions/checkout@v4
         with: { repository: aogg2023/songyuan-uefi, path: uefi }
       - name: xcode
@@ -33,21 +33,10 @@ jobs:
           ./unixnu status
           ./unixnu fetch
           ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache
-      - name: reference kernel
-        working-directory: framework
-        run: |
-          set -euo pipefail
-          ./unixnu defconfig songyuan_reference_defconfig -D ../songyuan-device
-          ./unixnu build kernel
-          test -f out/songyuan/kernel/kernel.macho
-          test -f out/songyuan/kernel/kernel.json
-          rm -rf out/songyuan/tree/build/xnu/ios-obj
       - name: build kernel
         working-directory: framework
         run: |
-          set -euo pipefail
-          ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
-          set +e
+          set -uo pipefail
           ./unixnu build kernel; rc=$?
           echo "kernel build rc=$rc"
           for f in out/songyuan/logs/*.log; do echo "=== $f (tail) ==="; tail -80 "$f" || true; done

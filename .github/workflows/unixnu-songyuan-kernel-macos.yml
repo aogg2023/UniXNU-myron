@@ -23,6 +23,7 @@ jobs:
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
           xcodebuild -version
           xcrun --find compression_tool
+          brew install openssl@3
           df -h /
       - name: resolve fetch ipsw
         working-directory: framework
@@ -33,6 +34,64 @@ jobs:
           ./unixnu status
           ./unixnu fetch
           ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache
+      - name: verified root cache
+        id: vrcache
+        uses: actions/cache@v4
+        with:
+          path: |
+            framework/out/songyuan/tree/build/verified-root-os
+            framework/out/songyuan/tree/build/verified-root-systemos
+            framework/out/songyuan/tree/build/verified-root-host
+          key: verified-root-21H461-v1
+          restore-keys: verified-root-21H461-
+      - name: verified root inputs
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/openssl@3/bin:$PATH"
+          tree=$(ls -d out/songyuan/tree)
+          volumes="$tree/.cache/firmware/target-volumes"
+          host="$tree/build/verified-root-host"
+          mkdir -p "$volumes" "$host/keys"
+          if [ -f "$tree/build/verified-root-os/verification.json" ] &&
+             [ -f "$tree/build/verified-root-systemos/verification.json" ] &&
+             [ -f "$host/verified-root.dylib" ] && [ -f "$host/keys/owner.pem" ]; then
+            echo "verified root fixtures restored from cache: $(ls -d "$tree"/build/verified-root-*)"
+          else
+            openssl version
+            openssl genrsa -out "$host/keys/owner.pem" 3072
+            openssl rsa -in "$host/keys/owner.pem" -pubout -out "$host/keys/owner-public.pem"
+            clang -dynamiclib -O2 -Wall -Wextra \
+              -I "$tree/kits/VerifiedRoot/include" -I /opt/homebrew/opt/openssl@3/include \
+              "$tree/kits/VerifiedRoot/src/verified_root.c" \
+              "$tree/kits/VerifiedRoot/tests/openssl_provider.c" \
+              -L /opt/homebrew/opt/openssl@3/lib -lcrypto \
+              -o "$host/verified-root.dylib"
+            nm -gU "$host/verified-root.dylib" | grep -E 'vr_host_open|vr_host_block'
+            ipsw="$RUNNER_TEMP/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+            [ -f "$ipsw" ] || curl -fL --retry 3 --retry-delay 5 -o "$ipsw" "$UNIXNU_IPSW"
+            unzip -o -j "$ipsw" "044-76040-038.dmg" -d "$volumes"
+            sysos_bytes=$((806400 * 4096))
+            member=$(unzip -l "$ipsw" | awk -v want="$sysos_bytes" '$1 == want {print $4; exit}')
+            if [ -z "$member" ]; then
+              echo "no $sysos_bytes-byte member in the IPSW; its disk images are:"
+              unzip -l "$ipsw" | grep -i '\.dmg' | head -20
+              exit 1
+            fi
+            echo "SystemOS member: $member ($sysos_bytes bytes)"
+            rm -rf "$RUNNER_TEMP/sysos" && mkdir -p "$RUNNER_TEMP/sysos"
+            unzip -o -j "$ipsw" "$member" -d "$RUNNER_TEMP/sysos"
+            mv -f "$RUNNER_TEMP/sysos/$(basename "$member")" "$volumes/044-76034-038.dmg"
+            echo '3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d  '"$volumes/044-76040-038.dmg" | shasum -a 256 -c -
+            echo 'b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f  '"$volumes/044-76034-038.dmg" | shasum -a 256 -c -
+            mkdir -p "$volumes/os-mount"
+            hdiutil attach -readonly -nobrowse -mountpoint "$volumes/os-mount" "$volumes/044-76040-038.dmg"
+            python3 "$tree/scripts/build-owner-os-policy.py"
+            python3 "$tree/scripts/build-owner-systemos-policy.py"
+            hdiutil detach "$volumes/os-mount"
+            rm -f "$volumes/044-76040-038.dmg" "$volumes/044-76034-038.dmg" "$ipsw"
+          fi
+          ls -l "$tree/build/verified-root-os" "$tree/build/verified-root-systemos" | head -20
       - name: reference kernel
         working-directory: framework
         run: |
@@ -47,6 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           ./unixnu defconfig songyuan_defconfig -D ../songyuan-device
+          mkdir -p out/songyuan/tree/build/xnu/ios-obj/EXPORT_HDRS/libsa
           set +e
           ./unixnu build kernel; rc=$?
           echo "kernel build rc=$rc"
